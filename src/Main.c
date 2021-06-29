@@ -964,6 +964,11 @@ AstType* Parser_ParseType(Parser* parser) {
 }
 
 AstStatement* Parser_ParseStatement(Parser* parser) {
+    if (parser->Current.Kind == TokenKind_Semicolon) {
+        Parser_ExpectToken(parser, TokenKind_Semicolon);
+        return Parser_ParseStatement(parser);
+    }
+
     if (parser->Current.Kind == TokenKind_Keyword) {
         switch (Parser_ExpectToken(parser, TokenKind_Keyword).Keyword) {
             case Keyword_Return: {
@@ -1006,7 +1011,9 @@ AstStatement* Parser_ParseStatement(Parser* parser) {
                 return NULL;
             }
 
-            Parser_ExpectToken(parser, TokenKind_Semicolon);
+            if (!value || (value && value->Kind != AstExpressionKind_Procedure)) {
+                Parser_ExpectToken(parser, TokenKind_Semicolon);
+            }
 
             AstStatement* declaration = malloc(sizeof(AstStatement));
             declaration->Kind = AstStatementKind_Declaration;
