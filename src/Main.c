@@ -743,6 +743,45 @@ u64 Parser_GetBinaryPresedence(Token token) {
     }
 }
 
+AstExpression* Parser_ParseProcedure(Parser* parser, AstProcedureArgument* firstArg) {
+    AstProcedureArgument* arguments = DynamicArrayCreate(AstProcedureArgument);
+    if (firstArg) {
+        DynamicArrayPush(arguments, *firstArg); // TODO: Memory leak
+    }
+
+    while (parser->Current.Kind != TokenKind_RParen) {
+        Parser_ExpectToken(parser, TokenKind_Comma);
+
+        Token nameToken = Parser_ExpectToken(parser, TokenKind_Name);
+
+        Parser_ExpectToken(parser, TokenKind_Colon);
+        AstType* type = Parser_ParseType(parser);
+
+        DynamicArrayPush(arguments, ((AstProcedureArgument){
+            .Name = nameToken,
+            .Type = type,
+        }));
+    }
+
+    Parser_ExpectToken(parser, TokenKind_RParen);
+
+    AstType* returnType = NULL;
+    if (parser->Current.Kind == TokenKind_RightArrow) {
+        Parser_ExpectToken(parser, TokenKind_RightArrow);
+        returnType = Parser_ParseType(parser);
+    }
+
+    AstScope* body = Parser_ParseScope(parser);
+
+    AstExpression* expression = malloc(sizeof(AstExpression));
+    expression->Kind = AstExpressionKind_Procedure;
+    expression->Procedure.Arguments = arguments;
+    expression->Procedure.ReturnType = returnType;
+    expression->Procedure.Body = body;
+
+    return expression;
+}
+
 AstExpression* Parser_ParsePrimaryExpression(Parser* parser) {
     switch (parser->Current.Kind) {
         case TokenKind_Name: {
@@ -771,10 +810,9 @@ AstExpression* Parser_ParsePrimaryExpression(Parser* parser) {
             Parser_ExpectToken(parser, TokenKind_LParen);
 
             if (parser->Current.Kind == TokenKind_RParen) {
-                // TODO: Procedure
-                ASSERT(FALSE);
+                return Parser_ParseProcedure(parser, NULL);
             }
-
+            
             AstExpression* expression = Parser_ParseExpression(parser);
 
             if (parser->Current.Kind == TokenKind_Colon) { // Procedure
@@ -786,43 +824,10 @@ AstExpression* Parser_ParsePrimaryExpression(Parser* parser) {
                 Parser_ExpectToken(parser, TokenKind_Colon);
                 AstType* type = Parser_ParseType(parser);
 
-                AstProcedureArgument* arguments = DynamicArrayCreate(AstProcedureArgument);
-                DynamicArrayPush(arguments, ((AstProcedureArgument){
+                return Parser_ParseProcedure(parser, &(AstProcedureArgument){
                     .Name = expression->Name.Name,
                     .Type = type,
-                }));
-
-                while (parser->Current.Kind != TokenKind_RParen) {
-                    Parser_ExpectToken(parser, TokenKind_Comma);
-
-                    Token nameToken = Parser_ExpectToken(parser, TokenKind_Name);
-
-                    Parser_ExpectToken(parser, TokenKind_Colon);
-                    AstType* type = Parser_ParseType(parser);
-
-                    DynamicArrayPush(arguments, ((AstProcedureArgument){
-                        .Name = nameToken,
-                        .Type = type,
-                    }));
-                }
-
-                Parser_ExpectToken(parser, TokenKind_RParen);
-
-                AstType* returnType = NULL;
-                if (parser->Current.Kind == TokenKind_RightArrow) {
-                    Parser_ExpectToken(parser, TokenKind_RightArrow);
-                    returnType = Parser_ParseType(parser);
-                }
-
-                AstScope* body = Parser_ParseScope(parser);
-
-                AstExpression* expression = malloc(sizeof(AstExpression));
-                expression->Kind = AstExpressionKind_Procedure;
-                expression->Procedure.Arguments = arguments;
-                expression->Procedure.ReturnType = returnType;
-                expression->Procedure.Body = body;
-
-                return expression;
+                });
             } else {
                 Parser_ExpectToken(parser, TokenKind_RParen);
                 return expression;
