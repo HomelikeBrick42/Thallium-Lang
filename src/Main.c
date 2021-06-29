@@ -43,6 +43,7 @@ typedef enum TokenKind {
     TokenKind_Semicolon,
     TokenKind_Period,
     TokenKind_Caret,
+    TokenKind_Comma,
 
     TokenKind_Plus,
     TokenKind_Minus,
@@ -64,6 +65,8 @@ typedef enum TokenKind {
 
     TokenKind_AmpersandAmpersand,
     TokenKind_PipePipe,
+
+    TokenKind_RightArrow,
 } TokenKind;
 
 const char* TokenKindNames[] = {
@@ -84,6 +87,7 @@ const char* TokenKindNames[] = {
     [TokenKind_Semicolon] = ";",
     [TokenKind_Period] = ".",
     [TokenKind_Caret] = "^",
+    [TokenKind_Comma] = ",",
 
     [TokenKind_Plus] = "+",
     [TokenKind_Minus] = "-",
@@ -105,6 +109,8 @@ const char* TokenKindNames[] = {
 
     [TokenKind_AmpersandAmpersand] = "&&",
     [TokenKind_PipePipe] = "||",
+
+    [TokenKind_RightArrow] = "->",
 };
 
 typedef struct Token {
@@ -129,12 +135,6 @@ void Error(const char* message, ...) {
     putchar('\n');
     ASSERT(FALSE);
     abort();
-}
-
-void* Duplicate(const void* src, u64 size) {
-    void* block = malloc(size);
-    memcpy(block, src, size);
-    return block;
 }
 
 typedef struct Lexer {
@@ -207,6 +207,7 @@ Start:
         CHAR(';', TokenKind_Semicolon);
         CHAR('.', TokenKind_Period);
         CHAR('^', TokenKind_Caret);
+        CHAR(',', TokenKind_Comma);
 
         #undef CHAR
 
@@ -231,7 +232,6 @@ Start:
         
         CHAR2('=', TokenKind_Equals, '=', TokenKind_EqualsEquals);
         CHAR2('+', TokenKind_Plus, '=', TokenKind_PlusEquals);
-        CHAR2('-', TokenKind_Minus, '=', TokenKind_MinusEquals);
         CHAR2('*', TokenKind_Asterisk, '=', TokenKind_AsteriskEquals);
         CHAR2('/', TokenKind_Slash, '=', TokenKind_SlashEquals);
         CHAR2('%', TokenKind_Percent, '=', TokenKind_PercentEquals);
@@ -241,6 +241,31 @@ Start:
         CHAR2('|', TokenKind_Pipe, '|', TokenKind_PipePipe);
 
         #undef CHAR2
+
+        case '-': {
+            Lexer_NextChar(lexer);
+            if (Lexer_CurrentChar(lexer) == '=') {
+                Lexer_NextChar(lexer);
+                return (Token){
+                    .Kind = TokenKind_MinusEquals,
+                    .Pos = startPos,
+                    .Length = 2,
+                };
+            } else if (Lexer_CurrentChar(lexer) == '>') {
+                Lexer_NextChar(lexer);
+                return (Token){
+                    .Kind = TokenKind_RightArrow,
+                    .Pos = startPos,
+                    .Length = 2,
+                };
+            } else {
+                return (Token){
+                    .Kind = TokenKind_Minus,
+                    .Pos = startPos,
+                    .Length = 1,
+                };
+            }
+        } break;
 
         case ' ': case '\t': case '\n': case '\r': {
             while (TRUE) {
@@ -498,52 +523,20 @@ Start:
     return (Token){};
 }
 
-typedef struct AstType AstType;
-typedef struct AstTypeName AstTypeName;
-typedef struct AstTypePointer AstTypePointer;
-
 typedef struct AstExpression AstExpression;
 typedef struct AstLiteral AstLiteral;
 typedef struct AstName AstName;
 typedef struct AstUnaryExpression AstUnaryExpression;
 typedef struct AstBinaryExpression AstBinaryExpression;
 typedef struct AstField AstField;
+typedef struct AstProcedure AstProcedure;
 
 typedef struct AstStatement AstStatement;
+typedef struct AstScope AstScope;
 typedef struct AstDeclaration AstDeclaration;
-typedef struct AstAssignment AstAssignment;
-typedef struct AstStruct AstStruct;
 
 typedef struct Ast Ast;
-typedef struct AstStructField AstStructField;
-
-// Type
-
-struct AstTypeName {
-    AstName* Name;
-};
-
-struct AstTypePointer {
-    AstType* PointerTo;
-};
-
-typedef enum AstTypeKind {
-    AstTypeKind_None,
-    AstTypeKind_Integer,
-    AstTypeKind_Float,
-    AstTypeKind_String,
-    AstTypeKind_Name,
-    AstTypeKind_Pointer,
-} AstTypeKind;
-
-struct AstType {
-    AstTypeKind Kind;
-
-    union {
-        AstTypeName Name;
-        AstTypePointer Pointer;
-    };
-};
+typedef struct AstType AstType;
 
 // Expression
 
@@ -571,6 +564,17 @@ struct AstField {
     Token Name;
 };
 
+typedef struct AstProcedureArgument {
+    Token Name;
+    AstType* Type;
+} AstProcedureArgument;
+
+struct AstProcedure {
+    AstProcedureArgument* Arguments;
+    AstType* ReturnType;
+    AstScope* Body;
+};
+
 typedef enum AstExpressionKind {
     AstExpressionKind_None,
     AstExpressionKind_Literal,
@@ -578,6 +582,7 @@ typedef enum AstExpressionKind {
     AstExpressionKind_Unary,
     AstExpressionKind_Binary,
     AstExpressionKind_Field,
+    AstExpressionKind_Procedure,
 } AstExpressionKind;
 
 struct AstExpression {
@@ -589,34 +594,27 @@ struct AstExpression {
         AstUnaryExpression Unary;
         AstBinaryExpression Binary;
         AstField Field;
+        AstProcedure Procedure;
     };
 };
 
 // Statement
 
+struct AstScope {
+    AstStatement** Statements;
+};
+
 struct AstDeclaration {
-    AstName* Name;
+    Token Name;
     AstType* Type;
     AstExpression* Value;
-};
-
-struct AstAssignment {
-    AstExpression* Left;
-    Token Operator;
-    AstExpression* Right;
-};
-
-struct AstStruct {
-    Token Name;
-    AstStructField* Fields;
 };
 
 typedef enum AstStatementKind {
     AstStatementKind_None,
     AstStatementKind_Expression,
+    AstStatementKind_Scope,
     AstStatementKind_Declaration,
-    AstStatementKind_Assignment,
-    AstStatementKind_Struct,
 } AstStatementKind;
 
 struct AstStatement {
@@ -624,23 +622,47 @@ struct AstStatement {
 
     union {
         AstExpression Expression;
+        AstScope Scope;
         AstDeclaration Declaration;
-        AstAssignment Assignment;
-        AstStruct Struct;
     };
 };
 
 // Ast
 
-struct AstStructField {
+typedef struct AstTypeUnknown {
     Token Name;
-    AstType* Type;
+} AstTypeUnknown;
+
+typedef struct AstTypePointer {
+    AstType* PointerTo;
+} AstTypePointer;
+
+typedef struct AstTypeProcedure {
+    AstProcedureArgument* Arguments;
+    AstType* ReturnType;
+} AstTypeProcedure;
+
+typedef enum AstTypeKind {
+    AstTypeKind_None,
+    AstTypeKind_Unknown,
+    AstTypeKind_Pointer,
+    AstTypeKind_Procedure,
+} AstTypeKind;
+
+struct AstType {
+    AstTypeKind Kind;
+
+    union {
+        AstTypeUnknown Unknown;
+        AstTypePointer Pointer;
+        AstTypeProcedure Procedure;
+    };
 };
 
 typedef enum AstKind {
     AstKind_None,
     AstKind_Statement,
-    AstKind_StructField,
+    AstKind_Type,
 } AstKind;
 
 struct Ast {
@@ -648,7 +670,7 @@ struct Ast {
 
     union {
         AstStatement Statement;
-        AstStructField StructField;
+        AstType Type;
     };
 };
 
@@ -676,8 +698,14 @@ Token Parser_ExpectToken(Parser* parser, TokenKind kind) {
     return token;
 }
 
+AstExpression* Parser_ParseExpression(Parser* parser);
+AstExpression* Parser_ParsePrimaryExpression(Parser* parser);
+AstExpression* Parser_ParseBinaryExpression(Parser* parser, u64 presedence);
+AstType* Parser_ParseType(Parser* parser);
+AstStatement* Parser_ParseStatement(Parser* parser);
+AstScope* Parser_ParseScope(Parser* parser);
+
 AstExpression* Parser_ParseExpression(Parser* parser) {
-    AstExpression* Parser_ParseBinaryExpression(Parser* parser, u64 presedence);
     return Parser_ParseBinaryExpression(parser, 0);
 }
 
@@ -718,30 +746,87 @@ u64 Parser_GetBinaryPresedence(Token token) {
 AstExpression* Parser_ParsePrimaryExpression(Parser* parser) {
     switch (parser->Current.Kind) {
         case TokenKind_Name: {
-            return Duplicate(&(AstExpression){
-                .Kind = AstExpressionKind_Name,
-                .Name = (AstName){
-                    .Name = Parser_NextToken(parser),
-                },
-            }, sizeof(AstExpression));
+            Token nameToken = Parser_ExpectToken(parser, TokenKind_Name);
+
+            AstExpression* expression = malloc(sizeof(AstExpression));
+            expression->Kind = AstExpressionKind_Name;
+            expression->Name.Name = nameToken;
+
+            return expression;
         } break;
 
         case TokenKind_Integer:
         case TokenKind_Float:
         case TokenKind_String: {
-            return Duplicate(&(AstExpression){
-                .Kind = AstExpressionKind_Literal,
-                .Literal = (AstLiteral){
-                    .Token = Parser_NextToken(parser),
-                },
-            }, sizeof(AstExpression));
+            Token literalToken = Parser_NextToken(parser);
+
+            AstExpression* expression = malloc(sizeof(AstExpression));
+            expression->Kind = AstExpressionKind_Literal;
+            expression->Literal.Token = literalToken;
+
+            return expression;
         } break;
 
         case TokenKind_LParen: {
-            Parser_NextToken(parser);
+            Parser_ExpectToken(parser, TokenKind_LParen);
+
+            if (parser->Current.Kind == TokenKind_RParen) {
+                // TODO: Procedure
+                ASSERT(FALSE);
+            }
+
             AstExpression* expression = Parser_ParseExpression(parser);
-            Parser_ExpectToken(parser, TokenKind_RParen);
-            return expression;
+
+            if (parser->Current.Kind == TokenKind_Colon) { // Procedure
+                if (expression->Kind != AstExpressionKind_Name) {
+                    Error("Expected ':'"); // TODO: Better error
+                    return NULL;
+                }
+
+                Parser_ExpectToken(parser, TokenKind_Colon);
+                AstType* type = Parser_ParseType(parser);
+
+                AstProcedureArgument* arguments = DynamicArrayCreate(AstProcedureArgument);
+                DynamicArrayPush(arguments, ((AstProcedureArgument){
+                    .Name = expression->Name.Name,
+                    .Type = type,
+                }));
+
+                while (parser->Current.Kind != TokenKind_RParen) {
+                    Parser_ExpectToken(parser, TokenKind_Comma);
+
+                    Token nameToken = Parser_ExpectToken(parser, TokenKind_Name);
+
+                    Parser_ExpectToken(parser, TokenKind_Colon);
+                    AstType* type = Parser_ParseType(parser);
+
+                    DynamicArrayPush(arguments, ((AstProcedureArgument){
+                        .Name = nameToken,
+                        .Type = type,
+                    }));
+                }
+
+                Parser_ExpectToken(parser, TokenKind_RParen);
+
+                AstType* returnType = NULL;
+                if (parser->Current.Kind == TokenKind_RightArrow) {
+                    Parser_ExpectToken(parser, TokenKind_RightArrow);
+                    returnType = Parser_ParseType(parser);
+                }
+
+                AstScope* body = Parser_ParseScope(parser);
+
+                AstExpression* expression = malloc(sizeof(AstExpression));
+                expression->Kind = AstExpressionKind_Procedure;
+                expression->Procedure.Arguments = arguments;
+                expression->Procedure.ReturnType = returnType;
+                expression->Procedure.Body = body;
+
+                return expression;
+            } else {
+                Parser_ExpectToken(parser, TokenKind_RParen);
+                return expression;
+            }
         } break;
 
         default: {
@@ -760,13 +845,11 @@ AstExpression* Parser_ParseBinaryExpression(Parser* parser, u64 presedence) {
     if (unaryPresedence != 0 && unaryPresedence > presedence) {
         Token operator = Parser_NextToken(parser);
         AstExpression* operand = Parser_ParseBinaryExpression(parser, unaryPresedence);
-        left = Duplicate(&(AstExpression){
-            .Kind = AstExpressionKind_Unary,
-            .Unary = (AstUnaryExpression){
-                .Operator = operator,
-                .Operand = operand,
-            },
-        }, sizeof(AstExpression));
+        
+        left = malloc(sizeof(AstExpression));
+        left->Kind = AstExpressionKind_Unary;
+        left->Unary.Operator = operator;
+        left->Unary.Operand = operand;
     } else {
         left = Parser_ParsePrimaryExpression(parser);
     }
@@ -781,27 +864,26 @@ AstExpression* Parser_ParseBinaryExpression(Parser* parser, u64 presedence) {
 
         switch (operator.Kind) {
             case TokenKind_Period: {
-                Token name = Parser_ExpectToken(parser, TokenKind_Name);
+                Token nameToken = Parser_ExpectToken(parser, TokenKind_Name);
 
-                left = Duplicate(&(AstExpression){
-                    .Kind = AstExpressionKind_Field,
-                    .Field = (AstField){
-                        .Expression = left,
-                        .Name = name,
-                    },
-                }, sizeof(AstExpression));
+                AstExpression* newLeft = malloc(sizeof(AstExpression));
+                newLeft->Kind = AstExpressionKind_Field;
+                newLeft->Field.Expression = left;
+                newLeft->Field.Name = nameToken;
+
+                left = newLeft;
             } break;
 
             default: {
                 AstExpression* right = Parser_ParseBinaryExpression(parser, binaryPresedence);
-                left = Duplicate(&(AstExpression){
-                    .Kind = AstExpressionKind_Binary,
-                    .Binary = (AstBinaryExpression){
-                        .Left = left,
-                        .Operator = operator,
-                        .Right = right,
-                    },
-                }, sizeof(AstExpression));
+
+                AstExpression* newLeft = malloc(sizeof(AstExpression));
+                newLeft->Kind = AstExpressionKind_Binary;
+                newLeft->Binary.Left = left;
+                newLeft->Binary.Operator = operator;
+                newLeft->Binary.Right = right;
+
+                left = newLeft;
             } break;
         }
     }
@@ -810,41 +892,34 @@ AstExpression* Parser_ParseBinaryExpression(Parser* parser, u64 presedence) {
 }
 
 AstType* Parser_ParseType(Parser* parser) {
-    if (parser->Current.Kind == TokenKind_Name) {
-        Token nameToken = Parser_ExpectToken(parser, TokenKind_Name);
+    switch (parser->Current.Kind) {
+        case TokenKind_Name: {
+            Token nameToken = Parser_ExpectToken(parser, TokenKind_Name);
+            AstType* type = malloc(sizeof(AstType));
+            type->Kind = AstTypeKind_Unknown;
+            type->Unknown.Name = nameToken;
+            return type;
+        } break;
 
-        AstName* name = Duplicate(&(AstName){
-            .Name = nameToken,
-        }, sizeof(AstName));
+        case TokenKind_Asterisk: {
+            Parser_ExpectToken(parser, TokenKind_Asterisk);
+            AstType* type = malloc(sizeof(AstType));
+            type->Kind = AstTypeKind_Pointer;
+            type->Pointer.PointerTo = Parser_ParseType(parser);
+            return type;
+        } break;
 
-        if (strcmp(name->Name.Name, "int") == 0) {
-            return Duplicate(&(AstType){
-                .Kind = AstTypeKind_Integer,
-            }, sizeof(AstType));
-        } else if (strcmp(name->Name.Name, "float") == 0) {
-            return Duplicate(&(AstType){
-                .Kind = AstTypeKind_Float,
-            }, sizeof(AstType));
-        } else if (strcmp(name->Name.Name, "string") == 0) {
-            return Duplicate(&(AstType){
-                .Kind = AstTypeKind_String,
-            }, sizeof(AstType));
-        }
+        case TokenKind_LParen: {
+            Parser_ExpectToken(parser, TokenKind_LParen);
+            AstType* type = Parser_ParseType(parser);
+            Parser_ExpectToken(parser, TokenKind_RParen);
+            return type;
+        } break;
 
-        return Duplicate(&(AstType){
-            .Kind = AstTypeKind_Name,
-            .Name = (AstTypeName){
-                .Name = name,
-            },
-        }, sizeof(AstType));
-    } else if (parser->Current.Kind == TokenKind_Caret) {
-        Parser_NextToken(parser);
-        return Duplicate(&(AstType){
-            .Kind = AstTypeKind_Pointer,
-            .Pointer = (AstTypePointer){
-                .PointerTo = Parser_ParseType(parser),
-            },
-        }, sizeof(AstType));
+        default: {
+            ASSERT(FALSE);
+            return NULL;
+        } break;
     }
 
     ASSERT(FALSE);
@@ -852,109 +927,68 @@ AstType* Parser_ParseType(Parser* parser) {
 }
 
 AstStatement* Parser_ParseStatement(Parser* parser) {
-    if (parser->Current.Kind == TokenKind_Name && strcmp(parser->Current.Name, "struct") == 0) {
-        Parser_NextToken(parser);
-        
-        Token name = Parser_ExpectToken(parser, TokenKind_Name);
-        Parser_ExpectToken(parser, TokenKind_LBrace);
+    AstExpression* expression = Parser_ParseExpression(parser);
 
-        AstStructField* fields = DynamicArrayCreate(AstStructField);
-        while (parser->Current.Kind != TokenKind_RBrace) {
-            Token name = Parser_NextToken(parser);
-            Parser_ExpectToken(parser, TokenKind_Colon);
-            AstType* type = Parser_ParseType(parser);
-            Parser_ExpectToken(parser, TokenKind_Semicolon);
-
-            DynamicArrayPush(fields, ((AstStructField){
-                .Name = name,
-                .Type = type,
-            }));
+    if (parser->Current.Kind == TokenKind_Colon) {
+        if (expression->Kind != AstExpressionKind_Name) {
+            Error("':' must be preceded by a name!");
+            return NULL;
         }
 
-        Parser_ExpectToken(parser, TokenKind_RBrace);
+        Parser_ExpectToken(parser, TokenKind_Colon);
 
-        return Duplicate(&(AstStatement){
-            .Kind = AstStatementKind_Struct,
-            .Struct = (AstStruct){
-                .Name = name,
-                .Fields = fields,
-            },
-        }, sizeof(AstStatement));
-    } else {
-        AstExpression* expression = Parser_ParseExpression(parser);
-
-        switch (parser->Current.Kind) {
-            case TokenKind_Colon: {
-                Parser_NextToken(parser);
-
-                if (expression->Kind != AstExpressionKind_Name) {
-                    Error("There must be a name before a declaration!");
-                    return NULL;
-                }
-
-                AstType* type = NULL;
-                if (parser->Current.Kind != TokenKind_Equals) {
-                    type = Parser_ParseType(parser);
-                }
-
-                AstExpression* value = NULL;
-                if (parser->Current.Kind == TokenKind_Equals) {
-                    Parser_NextToken(parser);
-                    value = Parser_ParseExpression(parser);
-                }
-
-                Parser_ExpectToken(parser, TokenKind_Semicolon);
-
-                if (type == NULL && value == NULL) {
-                    Error("Must have type or value for a declaration!");
-                    return NULL;
-                }
-
-                return Duplicate(&(AstStatement){
-                    .Kind = AstStatementKind_Declaration,
-                    .Declaration = (AstDeclaration){
-                        .Name = Duplicate(&expression->Name, sizeof(AstName)), // TODO: Memory leak
-                        .Type = type,
-                        .Value = value,
-                    },
-                }, sizeof(AstStatement));
-            } break;
-
-            case TokenKind_Equals:
-            case TokenKind_PlusEquals:
-            case TokenKind_MinusEquals:
-            case TokenKind_AsteriskEquals:
-            case TokenKind_SlashEquals:
-            case TokenKind_PercentEquals: {
-                Token operator = Parser_NextToken(parser);
-                AstExpression* right = Parser_ParseExpression(parser);
-
-                Parser_ExpectToken(parser, TokenKind_Semicolon);
-
-                return Duplicate(&(AstStatement){
-                    .Kind = AstStatementKind_Assignment,
-                    .Assignment = (AstAssignment){
-                        .Left = expression,
-                        .Operator = operator,
-                        .Right = right,
-                    },
-                }, sizeof(AstStatement));
-            } break;
-
-            default: {
-                Parser_ExpectToken(parser, TokenKind_Semicolon);
-
-                return Duplicate(&(AstStatement){
-                    .Kind = AstStatementKind_Expression,
-                    .Expression = *expression,
-                }, sizeof(AstStatement));
-            } break;
+        AstType* type = NULL;
+        if (parser->Current.Kind != TokenKind_Equals) {
+            type = Parser_ParseType(parser);
         }
+
+        AstExpression* value = NULL;
+        if (parser->Current.Kind == TokenKind_Equals) {
+            Parser_ExpectToken(parser, TokenKind_Equals);
+            value = Parser_ParseExpression(parser);
+        }
+
+        if (!type && !value) {
+            Error("Declaration must have type or value!");
+            return NULL;
+        }
+
+        Parser_ExpectToken(parser, TokenKind_Semicolon);
+
+        AstStatement* declaration = malloc(sizeof(AstStatement));
+        declaration->Kind = AstStatementKind_Declaration;
+        declaration->Declaration.Name = expression->Name.Name;
+        declaration->Declaration.Type = type;
+        declaration->Declaration.Value = value;
+        return declaration;
     }
 
-    ASSERT(FALSE);
-    return NULL;
+    Parser_ExpectToken(parser, TokenKind_Semicolon);
+    AstStatement* statement = malloc(sizeof(AstStatement));
+    statement->Kind = AstStatementKind_Expression;
+    statement->Expression = *expression; // Memory leak
+    return statement;
 }
+
+AstScope* Parser_ParseScope(Parser* parser) {
+    Parser_ExpectToken(parser, TokenKind_LBrace);
+    AstStatement** statements = DynamicArrayCreate(AstStatement*);
+
+    while (parser->Current.Kind != TokenKind_RBrace) {
+        DynamicArrayPush(statements, Parser_ParseStatement(parser));
+    }
+
+    Parser_ExpectToken(parser, TokenKind_RBrace);
+
+    AstScope* scope = malloc(sizeof(AstScope));
+    scope->Statements = statements;
+
+    return scope;
+}
+
+void Print_AstType(AstType* type, u64 indent);
+void Print_AstStatement(AstStatement* statement, u64 indent);
+void Print_AstExpression(AstExpression* expression, u64 indent);
 
 int main(int argc, char** argv) {
     if (argc != 2) {
@@ -1011,34 +1045,39 @@ int main(int argc, char** argv) {
 
     Parser parser;
     Parser_Init(&parser, path, source);
-
-    // HACK: Temporary
-    while (parser.Current.Kind != TokenKind_EndOfFile) {
-        AstStatement* statement = Parser_ParseStatement(&parser);
-        void Print_AstStatement(AstStatement* statement);
-        Print_AstStatement(statement);
-        putchar('\n');
-    }
+    AstStatement* statement = Parser_ParseStatement(&parser);
+    Print_AstStatement(statement, 0);
 
     return 0;
 }
 
-void Print_AstType(AstType* type);
-void Print_AstExpression(AstExpression* expression);
-void Print_AstStatement(AstStatement* statement);
+void Print_Indent(u64 indent) {
+    for (u64 i = 0; i < indent; i++) {
+        printf("    ");
+    }
+}
 
-void Print_AstStatement(AstStatement* statement) {
-    switch (statement->Kind) {
-        case AstStatementKind_Expression: {
-            Print_AstExpression(&statement->Expression);
+void Print_AstType(AstType* type, u64 indent) {
+    switch (type->Kind) {
+        case AstTypeKind_Unknown: {
+            printf("%s", type->Unknown.Name.Name);
         } break;
 
+        default: {
+            ASSERT(FALSE);
+        } break;
+    }
+}
+
+void Print_AstStatement(AstStatement* statement, u64 indent) {
+    switch (statement->Kind) {
         case AstStatementKind_Declaration: {
-            printf("%s", statement->Declaration.Name->Name.Name);
+            Print_Indent(indent);
+            printf("%s", statement->Declaration.Name.Name);
 
             if (statement->Declaration.Type) {
                 printf(": ");
-                Print_AstType(statement->Declaration.Type);
+                Print_AstType(statement->Declaration.Type, indent);
             } else {
                 printf(" := ");
             }
@@ -1047,32 +1086,20 @@ void Print_AstStatement(AstStatement* statement) {
                 if (statement->Declaration.Type) {
                     printf(" = ");
                 }
-                Print_AstExpression(statement->Declaration.Value);
+
+                Print_AstExpression(statement->Declaration.Value, indent);
             }
 
-            putchar(';');
-            putchar('\n');
+            printf(";\n");
         } break;
 
-        case AstStatementKind_Assignment: {
-            Print_AstExpression(statement->Assignment.Left);
-            printf(" %s ", TokenKindNames[statement->Assignment.Operator.Kind]);
-            Print_AstExpression(statement->Assignment.Right);
-
-            putchar(';');
-            putchar('\n');
-        } break;
-
-        case AstStatementKind_Struct: {
-            printf("struct %s {\n", statement->Struct.Name.Name);
-            for (u64 i = 0; i < DynamicArrayLength(statement->Struct.Fields); i++) {
-                printf("%s: ", statement->Struct.Fields[i].Name.Name);
-                Print_AstType(statement->Struct.Fields[i].Type);
-                putchar(';');
-                putchar('\n');
+        case AstStatementKind_Scope: {
+            printf("{\n");
+            for (u64 i = 0; i < DynamicArrayLength(statement->Scope.Statements); i++) {
+                Print_AstStatement(statement->Scope.Statements[i], indent + 1);
             }
-            putchar('}');
-            putchar('\n');
+            Print_Indent(indent);
+            printf("}");
         } break;
 
         default: {
@@ -1081,36 +1108,7 @@ void Print_AstStatement(AstStatement* statement) {
     }
 }
 
-void Print_AstType(AstType* type) {
-    switch (type->Kind) {
-        case AstTypeKind_Name: {
-            printf("%s", type->Name.Name->Name.Name);
-        } break;
-
-        case AstTypeKind_Integer: {
-            printf("int");
-        } break;
-
-        case AstTypeKind_Float: {
-            printf("float");
-        } break;
-
-        case AstTypeKind_String: {
-            printf("string");
-        } break;
-
-        case AstTypeKind_Pointer: {
-            putchar('^');
-            Print_AstType(type->Pointer.PointerTo);
-        } break;
-
-        default: {
-            ASSERT(FALSE);
-        } break;
-    }
-}
-
-void Print_AstExpression(AstExpression* expression) {
+void Print_AstExpression(AstExpression* expression, u64 indent) {
     switch (expression->Kind) {
         case AstExpressionKind_Name: {
             printf("%s", expression->Name.Name.Name);
@@ -1138,22 +1136,46 @@ void Print_AstExpression(AstExpression* expression) {
 
         case AstExpressionKind_Unary: {
             printf("(%s ", TokenKindNames[expression->Unary.Operator.Kind]);
-            Print_AstExpression(expression->Unary.Operand);
+            Print_AstExpression(expression->Unary.Operand, indent);
             putchar(')');
         } break;
 
         case AstExpressionKind_Binary: {
             putchar('(');
-            Print_AstExpression(expression->Binary.Left);
+            Print_AstExpression(expression->Binary.Left, indent);
             printf(" %s ", TokenKindNames[expression->Binary.Operator.Kind]);
-            Print_AstExpression(expression->Binary.Right);
+            Print_AstExpression(expression->Binary.Right, indent);
             putchar(')');
         } break;
 
         case AstExpressionKind_Field: {
             putchar('(');
-            Print_AstExpression(expression->Field.Expression);
+            Print_AstExpression(expression->Field.Expression, indent);
             printf(".%s)", expression->Field.Name.Name);
+        } break;
+
+        case AstExpressionKind_Procedure: {
+            printf("(");
+            for (u64 i = 0; i < DynamicArrayLength(expression->Procedure.Arguments); i++) {
+                if (i > 0) {
+                    printf(", ");
+                }
+
+                printf("%s: ", expression->Procedure.Arguments[i].Name.Name);
+                Print_AstType(expression->Procedure.Arguments[i].Type, indent);
+            }
+            printf(")");
+
+            if (expression->Procedure.ReturnType) {
+                printf(" -> ");
+                Print_AstType(expression->Procedure.ReturnType, indent);
+            }
+
+            printf(" ");
+            Print_AstStatement(&(AstStatement){
+                .Kind = AstStatementKind_Scope,
+                .Scope = *expression->Procedure.Body,
+            }, indent);
         } break;
 
         default: {
