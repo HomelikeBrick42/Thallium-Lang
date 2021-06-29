@@ -32,6 +32,7 @@ typedef enum TokenKind {
     TokenKind_Integer,
     TokenKind_Float,
     TokenKind_String,
+    TokenKind_Keyword,
 
     TokenKind_LParen,
     TokenKind_RParen,
@@ -76,6 +77,7 @@ const char* TokenKindNames[] = {
     [TokenKind_Integer] = "Integer",
     [TokenKind_Float] = "Float",
     [TokenKind_String] = "String",
+    [TokenKind_Keyword] = "Keyword",
 
     [TokenKind_LParen] = "(",
     [TokenKind_RParen] = ")",
@@ -113,6 +115,16 @@ const char* TokenKindNames[] = {
     [TokenKind_RightArrow] = "->",
 };
 
+typedef enum Keyword {
+    Keyword_Return,
+
+    Keyword_Count,
+} Keyword;
+
+const char* KeywordNames[] = {
+    [Keyword_Return] = "return",
+};
+
 typedef struct Token {
     TokenKind Kind;
     SrcPos Pos;
@@ -123,6 +135,7 @@ typedef struct Token {
         u64 Integer;
         f64 Float;
         const char* String;
+        Keyword Keyword;
     };
 } Token;
 
@@ -321,6 +334,18 @@ Start:
             }
 
             DynamicArrayPush(buffer, '\0');
+
+            for (u64 i = 0; i < Keyword_Count; i++) {
+                if (strcmp(buffer, KeywordNames[i]) == 0) {
+                    return (Token) {
+                        .Kind = TokenKind_Keyword,
+                        .Pos = startPos,
+                        .Length = length,
+                        .Keyword = i,
+                    };
+                }
+            }
+
             char* name = malloc(DynamicArraySize(buffer));
             memcpy(name, buffer, DynamicArraySize(buffer));
             DynamicArrayDestroy(buffer);
@@ -534,6 +559,7 @@ typedef struct AstProcedure AstProcedure;
 typedef struct AstStatement AstStatement;
 typedef struct AstScope AstScope;
 typedef struct AstDeclaration AstDeclaration;
+typedef struct AstReturn AstReturn;
 
 typedef struct Ast Ast;
 typedef struct AstType AstType;
@@ -610,11 +636,16 @@ struct AstDeclaration {
     AstExpression* Value;
 };
 
+struct AstReturn {
+    AstExpression* Expression;
+};
+
 typedef enum AstStatementKind {
     AstStatementKind_None,
     AstStatementKind_Expression,
     AstStatementKind_Scope,
     AstStatementKind_Declaration,
+    AstStatementKind_Return,
 } AstStatementKind;
 
 struct AstStatement {
@@ -624,6 +655,7 @@ struct AstStatement {
         AstExpression Expression;
         AstScope Scope;
         AstDeclaration Declaration;
+        AstReturn Return;
     };
 };
 
@@ -932,47 +964,67 @@ AstType* Parser_ParseType(Parser* parser) {
 }
 
 AstStatement* Parser_ParseStatement(Parser* parser) {
-    AstExpression* expression = Parser_ParseExpression(parser);
+    if (parser->Current.Kind == TokenKind_Keyword) {
+        switch (Parser_ExpectToken(parser, TokenKind_Keyword).Keyword) {
+            case Keyword_Return: {
+                AstStatement* statement = malloc(sizeof(AstStatement));
+                statement->Kind = AstStatementKind_Return;
+                statement->Return.Expression = Parser_ParseExpression(parser);
+                Parser_ExpectToken(parser, TokenKind_Semicolon);
+                return statement;
+            } break;
 
-    if (parser->Current.Kind == TokenKind_Colon) {
-        if (expression->Kind != AstExpressionKind_Name) {
-            Error("':' must be preceded by a name!");
-            return NULL;
+            default: {
+                ASSERT(FALSE);
+                return NULL;
+            } break;
         }
+    } else {
+        AstExpression* expression = Parser_ParseExpression(parser);
 
-        Parser_ExpectToken(parser, TokenKind_Colon);
+        if (parser->Current.Kind == TokenKind_Colon) {
+            if (expression->Kind != AstExpressionKind_Name) {
+                Error("':' must be preceded by a name!");
+                return NULL;
+            }
 
-        AstType* type = NULL;
-        if (parser->Current.Kind != TokenKind_Equals) {
-            type = Parser_ParseType(parser);
+            Parser_ExpectToken(parser, TokenKind_Colon);
+
+            AstType* type = NULL;
+            if (parser->Current.Kind != TokenKind_Equals) {
+                type = Parser_ParseType(parser);
+            }
+
+            AstExpression* value = NULL;
+            if (parser->Current.Kind == TokenKind_Equals) {
+                Parser_ExpectToken(parser, TokenKind_Equals);
+                value = Parser_ParseExpression(parser);
+            }
+
+            if (!type && !value) {
+                Error("Declaration must have type or value!");
+                return NULL;
+            }
+
+            Parser_ExpectToken(parser, TokenKind_Semicolon);
+
+            AstStatement* declaration = malloc(sizeof(AstStatement));
+            declaration->Kind = AstStatementKind_Declaration;
+            declaration->Declaration.Name = expression->Name.Name;
+            declaration->Declaration.Type = type;
+            declaration->Declaration.Value = value;
+            return declaration;
+        } else {
+            Parser_ExpectToken(parser, TokenKind_Semicolon);
+            AstStatement* statement = malloc(sizeof(AstStatement));
+            statement->Kind = AstStatementKind_Expression;
+            statement->Expression = *expression; // Memory leak
+            return statement;
         }
-
-        AstExpression* value = NULL;
-        if (parser->Current.Kind == TokenKind_Equals) {
-            Parser_ExpectToken(parser, TokenKind_Equals);
-            value = Parser_ParseExpression(parser);
-        }
-
-        if (!type && !value) {
-            Error("Declaration must have type or value!");
-            return NULL;
-        }
-
-        Parser_ExpectToken(parser, TokenKind_Semicolon);
-
-        AstStatement* declaration = malloc(sizeof(AstStatement));
-        declaration->Kind = AstStatementKind_Declaration;
-        declaration->Declaration.Name = expression->Name.Name;
-        declaration->Declaration.Type = type;
-        declaration->Declaration.Value = value;
-        return declaration;
     }
 
-    Parser_ExpectToken(parser, TokenKind_Semicolon);
-    AstStatement* statement = malloc(sizeof(AstStatement));
-    statement->Kind = AstStatementKind_Expression;
-    statement->Expression = *expression; // Memory leak
-    return statement;
+    ASSERT(FALSE);
+    return NULL;
 }
 
 AstScope* Parser_ParseScope(Parser* parser) {
@@ -1105,6 +1157,13 @@ void Print_AstStatement(AstStatement* statement, u64 indent) {
             }
             Print_Indent(indent);
             printf("}");
+        } break;
+
+        case AstStatementKind_Return: {
+            Print_Indent(indent);
+            printf("return ");
+            Print_AstExpression(statement->Return.Expression, indent);
+            printf(";\n");
         } break;
 
         default: {
