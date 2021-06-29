@@ -256,7 +256,6 @@ Start:
         CHAR2('=', TokenKind_Equals, '=', TokenKind_EqualsEquals);
         CHAR2('+', TokenKind_Plus, '=', TokenKind_PlusEquals);
         CHAR2('*', TokenKind_Asterisk, '=', TokenKind_AsteriskEquals);
-        CHAR2('/', TokenKind_Slash, '=', TokenKind_SlashEquals);
         CHAR2('%', TokenKind_Percent, '=', TokenKind_PercentEquals);
         CHAR2('!', TokenKind_ExclamationMark, '=', TokenKind_ExclamationMarkEquals);
 
@@ -303,6 +302,56 @@ Start:
                 break;
             }
         } goto Start;
+
+        case '/': {
+            Lexer_NextChar(lexer);
+            if (Lexer_CurrentChar(lexer) == '=') {
+                Lexer_NextChar(lexer);
+                return (Token){
+                    .Kind = TokenKind_SlashEquals,
+                    .Pos = startPos,
+                    .Length = 2,
+                };
+            } else if (Lexer_CurrentChar(lexer) == '/') {
+                while (Lexer_CurrentChar(lexer) != '\n' && Lexer_CurrentChar(lexer) != '\0') {
+                    Lexer_NextChar(lexer);
+                }
+                goto Start;
+            } else if (Lexer_CurrentChar(lexer) == '*') {
+                Lexer_NextChar(lexer);
+                u64 depth = 1;
+                while (depth > 0 && Lexer_CurrentChar(lexer) != '\0') {
+                    if (Lexer_CurrentChar(lexer) == '/') {
+                        Lexer_NextChar(lexer);
+                        if (Lexer_CurrentChar(lexer) == '*') {
+                            Lexer_NextChar(lexer);
+                            depth++;
+                        }
+                    } else if (Lexer_CurrentChar(lexer) == '*') {
+                        Lexer_NextChar(lexer);
+                        if (Lexer_CurrentChar(lexer) == '/') {
+                            Lexer_NextChar(lexer);
+                            depth--;
+                        }
+                    } else {
+                        Lexer_NextChar(lexer);
+                    }
+                }
+
+                if (Lexer_CurrentChar(lexer) == '\0') {
+                    Error("Unexpected end of file in block comment!");
+                    return (Token){};
+                }
+
+                goto Start;
+            } else {
+                return (Token){
+                    .Kind = TokenKind_Slash,
+                    .Pos = startPos,
+                    .Length = 1,
+                };
+            }
+        } break;
 
         case 'A': case 'B': case 'C': case 'D': case 'E':
         case 'F': case 'G': case 'H': case 'I': case 'J':

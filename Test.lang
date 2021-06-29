@@ -1,3 +1,15 @@
+// This is a comment
+
+/*
+    Nested
+    /*
+        Block
+        /*
+            Comment
+        */
+    */
+*/
+
 is_equal :: (a: int, b: int) -> bool {
     if a == b {
         return true;
