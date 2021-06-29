@@ -1,4 +1,4 @@
-is_equal := (a: int, b: int) -> bool {
+is_equal :: (a: int, b: int) -> bool {
     if a == b {
         return true;
     } else {

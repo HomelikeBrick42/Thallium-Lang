@@ -648,6 +648,7 @@ struct AstDeclaration {
     Token Name;
     AstType* Type;
     AstExpression* Value;
+    b8 Constant;
 };
 
 struct AstReturn {
@@ -1071,13 +1072,16 @@ AstStatement* Parser_ParseStatement(Parser* parser) {
             Parser_ExpectToken(parser, TokenKind_Colon);
 
             AstType* type = NULL;
-            if (parser->Current.Kind != TokenKind_Equals) {
+            if (parser->Current.Kind != TokenKind_Equals && parser->Current.Kind != TokenKind_Colon) {
                 type = Parser_ParseType(parser);
             }
 
+            b8 constant = FALSE;
             AstExpression* value = NULL;
-            if (parser->Current.Kind == TokenKind_Equals) {
-                Parser_ExpectToken(parser, TokenKind_Equals);
+            if (parser->Current.Kind == TokenKind_Equals || parser->Current.Kind == TokenKind_Colon) {
+                if (Parser_NextToken(parser).Kind == TokenKind_Colon) {
+                    constant = TRUE;
+                }
                 value = Parser_ParseExpression(parser);
             }
 
@@ -1095,6 +1099,7 @@ AstStatement* Parser_ParseStatement(Parser* parser) {
             declaration->Declaration.Name = expression->Name.Name;
             declaration->Declaration.Type = type;
             declaration->Declaration.Value = value;
+            declaration->Declaration.Constant = constant;
             return declaration;
         } else {
             Parser_ExpectToken(parser, TokenKind_Semicolon);
@@ -1218,12 +1223,12 @@ void Print_AstStatement(AstStatement* statement, u64 indent) {
                 printf(": ");
                 Print_AstType(statement->Declaration.Type, indent);
             } else {
-                printf(" := ");
+                printf(" :%c ", statement->Declaration.Constant ? ':' : '=');
             }
 
             if (statement->Declaration.Value) {
                 if (statement->Declaration.Type) {
-                    printf(" = ");
+                    printf(" %c ", statement->Declaration.Constant ? ':' : '=');
                 }
 
                 Print_AstExpression(statement->Declaration.Value, indent);
