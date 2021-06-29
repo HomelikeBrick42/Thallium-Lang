@@ -11,6 +11,7 @@
 */
 
 is_equal :: (a: int, b: int) -> bool {
+    // NOTE: maybe do 'return a == b;' but doing this for an 'if' example
     if a == b {
         return true;
     } else {
