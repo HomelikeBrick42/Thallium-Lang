@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "*.lang": "jai",
+        "stdio.h": "c",
+        "dynamicarray.h": "c"
+    }
+}

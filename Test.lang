@@ -1,0 +1,8 @@
+struct Test {
+    i: int;
+}
+
+a: string = 523 + (5.34 - 0x45) % 0b1000 * "This is a string!";
+
+b: Test;
+b.i = 5;
