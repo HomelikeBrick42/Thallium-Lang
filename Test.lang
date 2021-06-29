@@ -1,3 +1,7 @@
-add := (a: int, b: int) -> int {
-    return a + b;
+is_equal := (a: int, b: int) -> bool {
+    if a == b {
+        return true;
+    } else {
+        return false;
+    }
 }

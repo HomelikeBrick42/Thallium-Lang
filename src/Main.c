@@ -116,13 +116,23 @@ const char* TokenKindNames[] = {
 };
 
 typedef enum Keyword {
+    Keyword_True,
+    Keyword_False,
+    Keyword_Null,
     Keyword_Return,
+    Keyword_If,
+    Keyword_Else,
 
     Keyword_Count,
 } Keyword;
 
 const char* KeywordNames[] = {
+    [Keyword_True] = "true",
+    [Keyword_False] = "false",
+    [Keyword_Null] = "null",
     [Keyword_Return] = "return",
+    [Keyword_If] = "if",
+    [Keyword_Else] = "else",
 };
 
 typedef struct Token {
@@ -560,6 +570,7 @@ typedef struct AstStatement AstStatement;
 typedef struct AstScope AstScope;
 typedef struct AstDeclaration AstDeclaration;
 typedef struct AstReturn AstReturn;
+typedef struct AstIf AstIf;
 
 typedef struct Ast Ast;
 typedef struct AstType AstType;
@@ -603,6 +614,9 @@ struct AstProcedure {
 
 typedef enum AstExpressionKind {
     AstExpressionKind_None,
+    AstExpressionKind_True,
+    AstExpressionKind_False,
+    AstExpressionKind_Null,
     AstExpressionKind_Literal,
     AstExpressionKind_Name,
     AstExpressionKind_Unary,
@@ -640,12 +654,19 @@ struct AstReturn {
     AstExpression* Expression;
 };
 
+struct AstIf {
+    AstExpression* Condition;
+    AstStatement* Then;
+    AstStatement* Else;
+};
+
 typedef enum AstStatementKind {
     AstStatementKind_None,
     AstStatementKind_Expression,
     AstStatementKind_Scope,
     AstStatementKind_Declaration,
     AstStatementKind_Return,
+    AstStatementKind_If,
 } AstStatementKind;
 
 struct AstStatement {
@@ -656,6 +677,7 @@ struct AstStatement {
         AstScope Scope;
         AstDeclaration Declaration;
         AstReturn Return;
+        AstIf If;
     };
 };
 
@@ -748,7 +770,7 @@ u64 Parser_GetUnaryPresedence(Token token) {
         case TokenKind_Caret:
         case TokenKind_Asterisk:
         case TokenKind_ExclamationMark:
-            return 4;
+            return 5;
         default:
             return 0;
     }
@@ -757,15 +779,18 @@ u64 Parser_GetUnaryPresedence(Token token) {
 u64 Parser_GetBinaryPresedence(Token token) {
     switch (token.Kind) {
         case TokenKind_Period:
-            return 5;
+            return 6;
         case TokenKind_Asterisk:
         case TokenKind_Slash:
         case TokenKind_Percent:
         case TokenKind_Ampersand:
         case TokenKind_Pipe:
-            return 3;
+            return 4;
         case TokenKind_Plus:
         case TokenKind_Minus:
+            return 3;
+        case TokenKind_EqualsEquals:
+        case TokenKind_ExclamationMarkEquals:
             return 2;
         case TokenKind_AmpersandAmpersand:
         case TokenKind_PipePipe:
@@ -826,6 +851,35 @@ AstExpression* Parser_ParsePrimaryExpression(Parser* parser) {
             return expression;
         } break;
 
+        case TokenKind_Keyword: {
+            switch (parser->Current.Keyword) {
+                case Keyword_True: {
+                    Parser_ExpectToken(parser, TokenKind_Keyword);
+                    AstExpression* expression = malloc(sizeof(AstExpression));
+                    expression->Kind = AstExpressionKind_True;
+                    return expression;
+                } break;
+
+                case Keyword_False: {
+                    Parser_ExpectToken(parser, TokenKind_Keyword);
+                    AstExpression* expression = malloc(sizeof(AstExpression));
+                    expression->Kind = AstExpressionKind_False;
+                    return expression;
+                } break;
+
+                case Keyword_Null: {
+                    Parser_ExpectToken(parser, TokenKind_Keyword);
+                    AstExpression* expression = malloc(sizeof(AstExpression));
+                    expression->Kind = AstExpressionKind_Null;
+                    return expression;
+                } break;
+
+                default: {
+                    goto Default;
+                } break;
+            }
+        } break;
+
         case TokenKind_Integer:
         case TokenKind_Float:
         case TokenKind_String: {
@@ -844,7 +898,7 @@ AstExpression* Parser_ParsePrimaryExpression(Parser* parser) {
             if (parser->Current.Kind == TokenKind_RParen) {
                 return Parser_ParseProcedure(parser, NULL);
             }
-            
+
             AstExpression* expression = Parser_ParseExpression(parser);
 
             if (parser->Current.Kind == TokenKind_Colon) { // Procedure
@@ -866,7 +920,7 @@ AstExpression* Parser_ParsePrimaryExpression(Parser* parser) {
             }
         } break;
 
-        default: {
+        default: Default: {
             Error("Unexpected token '%s'", TokenKindNames[Parser_NextToken(parser).Kind]);
             return NULL;
         } break;
@@ -967,15 +1021,36 @@ AstStatement* Parser_ParseStatement(Parser* parser) {
     if (parser->Current.Kind == TokenKind_Semicolon) {
         Parser_ExpectToken(parser, TokenKind_Semicolon);
         return Parser_ParseStatement(parser);
-    }
-
-    if (parser->Current.Kind == TokenKind_Keyword) {
+    } else if (parser->Current.Kind == TokenKind_LBrace) {
+        AstStatement* statement = malloc(sizeof(AstStatement));
+        statement->Kind = AstStatementKind_Scope;
+        statement->Scope = *Parser_ParseScope(parser); // TODO: Memory leak
+        return statement;
+    } else if (parser->Current.Kind == TokenKind_Keyword) {
         switch (Parser_ExpectToken(parser, TokenKind_Keyword).Keyword) {
             case Keyword_Return: {
                 AstStatement* statement = malloc(sizeof(AstStatement));
                 statement->Kind = AstStatementKind_Return;
                 statement->Return.Expression = Parser_ParseExpression(parser);
                 Parser_ExpectToken(parser, TokenKind_Semicolon);
+                return statement;
+            } break;
+
+            case Keyword_If: {
+                AstExpression* condition = Parser_ParseExpression(parser);
+                AstStatement* then = Parser_ParseStatement(parser);
+
+                AstStatement* else_ = NULL;
+                if (parser->Current.Kind == TokenKind_Keyword && parser->Current.Keyword == Keyword_Else) {
+                    Parser_ExpectToken(parser, TokenKind_Keyword);
+                    else_ = Parser_ParseStatement(parser);
+                }
+
+                AstStatement* statement = malloc(sizeof(AstStatement));
+                statement->Kind = AstStatementKind_If;
+                statement->If.Condition = condition;
+                statement->If.Then = then;
+                statement->If.Else = else_;
                 return statement;
             } break;
 
@@ -1173,6 +1248,38 @@ void Print_AstStatement(AstStatement* statement, u64 indent) {
             printf(";\n");
         } break;
 
+        case AstStatementKind_If: {
+            Print_Indent(indent);
+            printf("if ");
+            Print_AstExpression(statement->If.Condition, indent);
+
+            if (statement->If.Then->Kind != AstStatementKind_Scope) {
+                printf("\n");
+                Print_Indent(indent);
+            } else {
+                printf(" ");
+            }
+            Print_AstStatement(statement->If.Then, indent);
+
+            if (statement->If.Else) {
+                if (statement->If.Then->Kind == AstStatementKind_Scope) {
+                    printf(" ");
+                } else {
+                    Print_Indent(indent);
+                }
+
+                printf("else ");
+                if (statement->If.Else->Kind != AstStatementKind_Scope) {
+                    printf("\n");
+                    Print_Indent(indent);
+                }
+
+                Print_AstStatement(statement->If.Else, indent);
+            }
+
+            printf("\n");
+        } break;
+
         default: {
             ASSERT(FALSE);
         } break;
@@ -1247,6 +1354,18 @@ void Print_AstExpression(AstExpression* expression, u64 indent) {
                 .Kind = AstStatementKind_Scope,
                 .Scope = *expression->Procedure.Body,
             }, indent);
+        } break;
+
+        case AstExpressionKind_True: {
+            printf("true");
+        } break;
+
+        case AstExpressionKind_False: {
+            printf("false");
+        } break;
+
+        case AstExpressionKind_Null: {
+            printf("null");
         } break;
 
         default: {
