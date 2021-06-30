@@ -122,6 +122,7 @@ typedef enum Keyword {
     Keyword_Return,
     Keyword_If,
     Keyword_Else,
+    Keyword_Struct,
 
     Keyword_Count,
 } Keyword;
@@ -133,6 +134,7 @@ const char* KeywordNames[] = {
     [Keyword_Return] = "return",
     [Keyword_If] = "if",
     [Keyword_Else] = "else",
+    [Keyword_Struct] = "struct",
 };
 
 typedef struct Token {
@@ -148,6 +150,16 @@ typedef struct Token {
         Keyword Keyword;
     };
 } Token;
+
+b8 TokenIsAssignment(Token token) {
+    return
+        token.Kind == TokenKind_Equals ||
+        token.Kind == TokenKind_PlusEquals ||
+        token.Kind == TokenKind_MinusEquals ||
+        token.Kind == TokenKind_AsteriskEquals ||
+        token.Kind == TokenKind_SlashEquals ||
+        token.Kind == TokenKind_PercentEquals;
+}
 
 void Error(const char* message, ...) {
     __builtin_va_list args;
@@ -613,12 +625,15 @@ typedef struct AstName AstName;
 typedef struct AstUnaryExpression AstUnaryExpression;
 typedef struct AstBinaryExpression AstBinaryExpression;
 typedef struct AstField AstField;
+typedef struct AstStruct AstStruct;
 typedef struct AstProcedure AstProcedure;
 typedef struct AstCall AstCall;
+typedef struct AstStruct AstStruct;
 
 typedef struct AstStatement AstStatement;
 typedef struct AstScope AstScope;
 typedef struct AstDeclaration AstDeclaration;
+typedef struct AstAssignment AstAssignment;
 typedef struct AstReturn AstReturn;
 typedef struct AstIf AstIf;
 
@@ -651,6 +666,10 @@ struct AstField {
     Token Name;
 };
 
+struct AstStruct {
+    AstDeclaration* Declarations;
+};
+
 typedef struct AstProcedureArgument {
     Token Name;
     AstType* Type;
@@ -677,6 +696,7 @@ typedef enum AstExpressionKind {
     AstExpressionKind_Unary,
     AstExpressionKind_Binary,
     AstExpressionKind_Field,
+    AstExpressionKind_Struct,
     AstExpressionKind_Procedure,
     AstExpressionKind_Call,
 } AstExpressionKind;
@@ -690,6 +710,7 @@ struct AstExpression {
         AstUnaryExpression Unary;
         AstBinaryExpression Binary;
         AstField Field;
+        AstStruct Struct;
         AstProcedure Procedure;
         AstCall Call;
     };
@@ -708,6 +729,12 @@ struct AstDeclaration {
     b8 Constant;
 };
 
+struct AstAssignment {
+    AstExpression* Operand;
+    Token Operator;
+    AstExpression* Value;
+};
+
 struct AstReturn {
     AstExpression* Expression;
 };
@@ -723,6 +750,7 @@ typedef enum AstStatementKind {
     AstStatementKind_Expression,
     AstStatementKind_Scope,
     AstStatementKind_Declaration,
+    AstStatementKind_Assignment,
     AstStatementKind_Return,
     AstStatementKind_If,
 } AstStatementKind;
@@ -734,6 +762,7 @@ struct AstStatement {
         AstExpression Expression;
         AstScope Scope;
         AstDeclaration Declaration;
+        AstAssignment Assignment;
         AstReturn Return;
         AstIf If;
     };
@@ -910,25 +939,40 @@ AstExpression* Parser_ParsePrimaryExpression(Parser* parser) {
         } break;
 
         case TokenKind_Keyword: {
-            switch (parser->Current.Keyword) {
+            switch (Parser_ExpectToken(parser, TokenKind_Keyword).Keyword) {
                 case Keyword_True: {
-                    Parser_ExpectToken(parser, TokenKind_Keyword);
                     AstExpression* expression = malloc(sizeof(AstExpression));
                     expression->Kind = AstExpressionKind_True;
                     return expression;
                 } break;
 
                 case Keyword_False: {
-                    Parser_ExpectToken(parser, TokenKind_Keyword);
                     AstExpression* expression = malloc(sizeof(AstExpression));
                     expression->Kind = AstExpressionKind_False;
                     return expression;
                 } break;
 
                 case Keyword_Null: {
-                    Parser_ExpectToken(parser, TokenKind_Keyword);
                     AstExpression* expression = malloc(sizeof(AstExpression));
                     expression->Kind = AstExpressionKind_Null;
+                    return expression;
+                } break;
+
+                case Keyword_Struct: {
+                    AstScope* scope = Parser_ParseScope(parser); // TODO: Memory leak
+
+                    AstDeclaration* declarations = DynamicArrayCreate(AstDeclaration);
+                    for (u64 i = 0; i < DynamicArrayLength(scope->Statements); i++) {
+                        if (scope->Statements[i]->Kind != AstStatementKind_Declaration) {
+                            Error("Expected declaration in struct");
+                            return NULL;
+                        }
+                        DynamicArrayPush(declarations, scope->Statements[i]->Declaration);
+                    }
+
+                    AstExpression* expression = malloc(sizeof(AstExpression));
+                    expression->Kind = AstExpressionKind_Struct;
+                    expression->Struct.Declarations = declarations;
                     return expression;
                 } break;
 
@@ -1170,7 +1214,7 @@ AstStatement* Parser_ParseStatement(Parser* parser) {
                 return NULL;
             }
 
-            if (!value || (value && value->Kind != AstExpressionKind_Procedure)) {
+            if (!value || (value && value->Kind != AstExpressionKind_Procedure && value->Kind != AstExpressionKind_Struct)) {
                 Parser_ExpectToken(parser, TokenKind_Semicolon);
             }
 
@@ -1181,6 +1225,17 @@ AstStatement* Parser_ParseStatement(Parser* parser) {
             declaration->Declaration.Value = value;
             declaration->Declaration.Constant = constant;
             return declaration;
+        } else if (TokenIsAssignment(parser->Current)) {
+            Token operator = Parser_NextToken(parser);
+            AstExpression* value = Parser_ParseExpression(parser);
+            Parser_ExpectToken(parser, TokenKind_Semicolon);
+
+            AstStatement* assignment = malloc(sizeof(AstStatement));
+            assignment->Kind = AstStatementKind_Assignment;
+            assignment->Assignment.Operand = expression;
+            assignment->Assignment.Operator = operator;
+            assignment->Assignment.Value = value;
+            return assignment;
         } else {
             Parser_ExpectToken(parser, TokenKind_Semicolon);
             AstStatement* statement = malloc(sizeof(AstStatement));
@@ -1317,6 +1372,14 @@ void Print_AstStatement(AstStatement* statement, u64 indent) {
             printf(";\n");
         } break;
 
+        case AstStatementKind_Assignment: {
+            Print_Indent(indent);
+            Print_AstExpression(statement->Assignment.Operand, indent);
+            printf(" %s ", TokenKindNames[statement->Assignment.Operator.Kind]);
+            Print_AstExpression(statement->Assignment.Value, indent);
+            printf(";\n");
+        } break;
+
         case AstStatementKind_Scope: {
             printf("{\n");
             for (u64 i = 0; i < DynamicArrayLength(statement->Scope.Statements); i++) {
@@ -1439,6 +1502,18 @@ void Print_AstExpression(AstExpression* expression, u64 indent) {
                 .Kind = AstStatementKind_Scope,
                 .Scope = *expression->Procedure.Body,
             }, indent);
+        } break;
+
+        case AstExpressionKind_Struct: {
+            printf("struct {\n");
+            for (u64 i = 0; i < DynamicArrayLength(expression->Struct.Declarations); i++) {
+                AstStatement statement = {};
+                statement.Kind = AstStatementKind_Declaration;
+                statement.Declaration = expression->Struct.Declarations[i];
+                Print_AstStatement(&statement, indent + 1);
+            }
+            Print_Indent(indent);
+            printf("}");
         } break;
 
         case AstExpressionKind_True: {
