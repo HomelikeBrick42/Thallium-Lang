@@ -614,6 +614,7 @@ typedef struct AstUnaryExpression AstUnaryExpression;
 typedef struct AstBinaryExpression AstBinaryExpression;
 typedef struct AstField AstField;
 typedef struct AstProcedure AstProcedure;
+typedef struct AstCall AstCall;
 
 typedef struct AstStatement AstStatement;
 typedef struct AstScope AstScope;
@@ -661,6 +662,11 @@ struct AstProcedure {
     AstScope* Body;
 };
 
+struct AstCall {
+    AstExpression* Operand;
+    AstExpression** Arguments;
+};
+
 typedef enum AstExpressionKind {
     AstExpressionKind_None,
     AstExpressionKind_True,
@@ -672,6 +678,7 @@ typedef enum AstExpressionKind {
     AstExpressionKind_Binary,
     AstExpressionKind_Field,
     AstExpressionKind_Procedure,
+    AstExpressionKind_Call,
 } AstExpressionKind;
 
 struct AstExpression {
@@ -684,6 +691,7 @@ struct AstExpression {
         AstBinaryExpression Binary;
         AstField Field;
         AstProcedure Procedure;
+        AstCall Call;
     };
 };
 
@@ -996,6 +1004,29 @@ AstExpression* Parser_ParseBinaryExpression(Parser* parser, u64 presedence) {
     }
 
     while (TRUE) {
+        if (parser->Current.Kind == TokenKind_LParen) {
+            Parser_ExpectToken(parser, TokenKind_LParen);
+            AstExpression** arguments = DynamicArrayCreate(AstExpression*);
+
+            b8 first = TRUE;
+            while (parser->Current.Kind != TokenKind_RParen) {
+                if (!first) {
+                    Parser_ExpectToken(parser, TokenKind_Comma);
+                } else {
+                    first = FALSE;
+                }
+
+                DynamicArrayPush(arguments, Parser_ParseExpression(parser));
+            }
+            Parser_ExpectToken(parser, TokenKind_RParen);
+
+            AstExpression* expression = malloc(sizeof(AstExpression));
+            expression->Kind = AstExpressionKind_Call;
+            expression->Call.Operand = left;
+            expression->Call.Arguments = arguments;
+            left = expression;
+        }
+
         u64 binaryPresedence = Parser_GetBinaryPresedence(parser->Current);
         if (binaryPresedence == 0 || binaryPresedence <= presedence) {
             break;
@@ -1420,6 +1451,18 @@ void Print_AstExpression(AstExpression* expression, u64 indent) {
 
         case AstExpressionKind_Null: {
             printf("null");
+        } break;
+
+        case AstExpressionKind_Call: {
+            Print_AstExpression(expression->Call.Operand, indent);
+            printf("(");
+            for (u64 i = 0; i < DynamicArrayLength(expression->Call.Arguments); i++) {
+                if (i > 0) {
+                    printf(", ");
+                }
+                Print_AstExpression(expression->Call.Arguments[i], indent);
+            }
+            printf(")");
         } break;
 
         default: {

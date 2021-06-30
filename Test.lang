@@ -10,11 +10,20 @@
     */
 */
 
-is_equal :: (a: int, b: int) -> bool {
-    // NOTE: maybe do 'return a == b;' but doing this for an 'if' example
-    if a == b {
-        return true;
-    } else {
-        return false;
+main :: () -> void {
+    add :: (a: int, b: int) -> int {
+        return a + b;
     }
+
+    is_equal :: (a: int, b: int) -> bool {
+        // NOTE: maybe do 'return a == b;' but doing this for an 'if' example
+        if a == b {
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    number: int = add(5, 6); // Explicitly setting type as int
+    equal := is_equal(number, 11); // Type will be figured out as 'bool'
 }
