@@ -43,6 +43,7 @@ typedef enum TokenKind {
     TokenKind_Colon,
     TokenKind_Semicolon,
     TokenKind_Period,
+    TokenKind_PeriodPeriod,
     TokenKind_Caret,
     TokenKind_Comma,
 
@@ -88,6 +89,7 @@ const char* TokenKindNames[] = {
     [TokenKind_Colon] = ":",
     [TokenKind_Semicolon] = ";",
     [TokenKind_Period] = ".",
+    [TokenKind_PeriodPeriod] = "..",
     [TokenKind_Caret] = "^",
     [TokenKind_Comma] = ",",
 
@@ -240,7 +242,6 @@ Start:
         CHAR(']', TokenKind_RBracket);
         CHAR(':', TokenKind_Colon);
         CHAR(';', TokenKind_Semicolon);
-        CHAR('.', TokenKind_Period);
         CHAR('^', TokenKind_Caret);
         CHAR(',', TokenKind_Comma);
 
@@ -265,6 +266,8 @@ Start:
                 } \
             } break
         
+        CHAR2('.', TokenKind_Period, '.', TokenKind_PeriodPeriod);
+
         CHAR2('=', TokenKind_Equals, '=', TokenKind_EqualsEquals);
         CHAR2('+', TokenKind_Plus, '=', TokenKind_PlusEquals);
         CHAR2('*', TokenKind_Asterisk, '=', TokenKind_AsteriskEquals);
@@ -627,8 +630,9 @@ typedef struct AstBinaryExpression AstBinaryExpression;
 typedef struct AstField AstField;
 typedef struct AstStruct AstStruct;
 typedef struct AstProcedure AstProcedure;
-typedef struct AstCall AstCall;
 typedef struct AstStruct AstStruct;
+typedef struct AstCall AstCall;
+typedef struct AstIndex AstIndex;
 
 typedef struct AstStatement AstStatement;
 typedef struct AstScope AstScope;
@@ -686,6 +690,11 @@ struct AstCall {
     AstExpression** Arguments;
 };
 
+struct AstIndex {
+    AstExpression* Operand;
+    AstExpression* Index;
+};
+
 typedef enum AstExpressionKind {
     AstExpressionKind_None,
     AstExpressionKind_True,
@@ -699,6 +708,7 @@ typedef enum AstExpressionKind {
     AstExpressionKind_Struct,
     AstExpressionKind_Procedure,
     AstExpressionKind_Call,
+    AstExpressionKind_Index,
 } AstExpressionKind;
 
 struct AstExpression {
@@ -713,6 +723,7 @@ struct AstExpression {
         AstStruct Struct;
         AstProcedure Procedure;
         AstCall Call;
+        AstIndex Index;
     };
 };
 
@@ -783,11 +794,19 @@ typedef struct AstTypeProcedure {
     AstType* ReturnType;
 } AstTypeProcedure;
 
+typedef struct AstTypeArray {
+    AstExpression* Count;
+    b8 Dynamic;
+    AstType* ArrayOf;
+} AstTypeArray;
+
 typedef enum AstTypeKind {
     AstTypeKind_None,
     AstTypeKind_Unknown,
     AstTypeKind_Pointer,
     AstTypeKind_Procedure,
+    AstTypeKind_Struct,
+    AstTypeKind_Array,
 } AstTypeKind;
 
 struct AstType {
@@ -797,6 +816,8 @@ struct AstType {
         AstTypeUnknown Unknown;
         AstTypePointer Pointer;
         AstTypeProcedure Procedure;
+        AstStruct Struct;
+        AstTypeArray Array;
     };
 };
 
@@ -1069,6 +1090,16 @@ AstExpression* Parser_ParseBinaryExpression(Parser* parser, u64 presedence) {
             expression->Call.Operand = left;
             expression->Call.Arguments = arguments;
             left = expression;
+        } else if (parser->Current.Kind == TokenKind_LBracket) {
+            Parser_ExpectToken(parser, TokenKind_LBracket);
+            AstExpression* index = Parser_ParseExpression(parser);
+            Parser_ExpectToken(parser, TokenKind_RBracket);
+
+            AstExpression* expression = malloc(sizeof(AstExpression));
+            expression->Kind = AstExpressionKind_Index;
+            expression->Index.Operand = left;
+            expression->Index.Index = index;
+            left = expression;
         }
 
         u64 binaryPresedence = Parser_GetBinaryPresedence(parser->Current);
@@ -1117,8 +1148,8 @@ AstType* Parser_ParseType(Parser* parser) {
             return type;
         } break;
 
-        case TokenKind_Asterisk: {
-            Parser_ExpectToken(parser, TokenKind_Asterisk);
+        case TokenKind_Caret: {
+            Parser_ExpectToken(parser, TokenKind_Caret);
             AstType* type = malloc(sizeof(AstType));
             type->Kind = AstTypeKind_Pointer;
             type->Pointer.PointerTo = Parser_ParseType(parser);
@@ -1129,6 +1160,26 @@ AstType* Parser_ParseType(Parser* parser) {
             Parser_ExpectToken(parser, TokenKind_LParen);
             AstType* type = Parser_ParseType(parser);
             Parser_ExpectToken(parser, TokenKind_RParen);
+            return type;
+        } break;
+
+        case TokenKind_LBracket: {
+            Parser_ExpectToken(parser, TokenKind_LBracket);
+            b8 dynamic = FALSE;
+            AstExpression* count = NULL;
+            if (parser->Current.Kind == TokenKind_PeriodPeriod) {
+                dynamic = TRUE;
+            } else if (parser->Current.Kind != TokenKind_RBracket) {
+                count = Parser_ParseExpression(parser);
+            }
+            Parser_ExpectToken(parser, TokenKind_RBracket);
+            AstType* arrayOf = Parser_ParseType(parser);
+            
+            AstType* type = malloc(sizeof(AstType));
+            type->Kind = AstTypeKind_Array;
+            type->Array.Dynamic = dynamic;
+            type->Array.Count = count;
+            type->Array.ArrayOf = arrayOf;
             return type;
         } break;
 
@@ -1274,7 +1325,7 @@ int main(int argc, char** argv) {
         printf("usage Thallium.exe [main file]\n");
         return -2;
     }
-    
+
     const char* path = argv[1];
 
     FILE* file = fopen(path, "rb");
@@ -1340,6 +1391,22 @@ void Print_AstType(AstType* type, u64 indent) {
     switch (type->Kind) {
         case AstTypeKind_Unknown: {
             printf("%s", type->Unknown.Name.Name);
+        } break;
+
+        case AstTypeKind_Pointer: {
+            printf("^");
+            Print_AstType(type->Pointer.PointerTo, indent);
+        } break;
+
+        case AstTypeKind_Array: {
+            printf("[");
+            if (type->Array.Dynamic) {
+                printf("..");
+            } else if (type->Array.Count) {
+                Print_AstExpression(type->Array.Count, indent);
+            }
+            printf("]");
+            Print_AstType(type->Array.ArrayOf, indent);
         } break;
 
         default: {
@@ -1538,6 +1605,13 @@ void Print_AstExpression(AstExpression* expression, u64 indent) {
                 Print_AstExpression(expression->Call.Arguments[i], indent);
             }
             printf(")");
+        } break;
+
+        case AstExpressionKind_Index: {
+            Print_AstExpression(expression->Index.Operand, indent);
+            printf("[");
+            Print_AstExpression(expression->Index.Index, indent);
+            printf("]");
         } break;
 
         default: {

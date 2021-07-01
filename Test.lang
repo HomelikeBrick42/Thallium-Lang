@@ -23,7 +23,7 @@ main :: () -> void {
             return false;
         }
     }
-    
+
     number: int = add(5, 6); // Explicitly setting type as int
     equal := is_equal(number, 11); // Type will be figured out as 'bool'
 
@@ -35,4 +35,7 @@ main :: () -> void {
     t: test;
     t.i = 0x54;
     t.f = 3.14;
+
+    array: [5]^float;
+    array[0] = 54.23;
 }
