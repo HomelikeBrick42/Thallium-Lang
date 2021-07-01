@@ -37,5 +37,5 @@ main :: () -> void {
     t.f = 3.14;
 
     array: [5]^float;
-    array[0] = 54.23;
+    *array[0] = 54.23;
 }
