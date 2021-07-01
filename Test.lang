@@ -38,4 +38,6 @@ main :: () -> void {
 
     array: [5]^float;
     *array[0] = 54.23;
+
+    size: usize = size_of(test);
 }

@@ -7,6 +7,17 @@
 
 #include <stdarg.h>
 
+void* Allocate(u64 size) {
+    void* ptr = malloc(size);
+    if (!ptr) {
+        perror("Allocate failed!");
+        abort();
+        return NULL;
+    }
+    memset(ptr, 0, size);
+    return ptr;
+}
+
 b8 MatchStrings(const char* a, const char* b) {
     // TODO: Intern all strings so pointer comparasion can be used
     return strcmp(a, b) == 0;
@@ -125,6 +136,7 @@ typedef enum Keyword {
     Keyword_If,
     Keyword_Else,
     Keyword_Struct,
+    Keyword_SizeOf,
 
     Keyword_Count,
 } Keyword;
@@ -137,6 +149,7 @@ const char* KeywordNames[] = {
     [Keyword_If] = "if",
     [Keyword_Else] = "else",
     [Keyword_Struct] = "struct",
+    [Keyword_SizeOf] = "size_of",
 };
 
 typedef struct Token {
@@ -420,7 +433,7 @@ Start:
                 }
             }
 
-            char* name = malloc(DynamicArraySize(buffer));
+            char* name = Allocate(DynamicArraySize(buffer));
             memcpy(name, buffer, DynamicArraySize(buffer));
             DynamicArrayDestroy(buffer);
 
@@ -601,7 +614,7 @@ Start:
             }
 
             DynamicArrayPush(buffer, '\0');
-            char* string = malloc(DynamicArraySize(buffer));
+            char* string = Allocate(DynamicArraySize(buffer));
             memcpy(string, buffer, DynamicArraySize(buffer));
             DynamicArrayDestroy(buffer);
 
@@ -633,6 +646,7 @@ typedef struct AstProcedure AstProcedure;
 typedef struct AstStruct AstStruct;
 typedef struct AstCall AstCall;
 typedef struct AstIndex AstIndex;
+typedef struct AstSizeOf AstSizeOf;
 
 typedef struct AstStatement AstStatement;
 typedef struct AstScope AstScope;
@@ -695,6 +709,10 @@ struct AstIndex {
     AstExpression* Index;
 };
 
+struct AstSizeOf {
+    AstExpression* Expression;
+};
+
 typedef enum AstExpressionKind {
     AstExpressionKind_None,
     AstExpressionKind_True,
@@ -709,6 +727,7 @@ typedef enum AstExpressionKind {
     AstExpressionKind_Procedure,
     AstExpressionKind_Call,
     AstExpressionKind_Index,
+    AstExpressionKind_Sizeof,
 } AstExpressionKind;
 
 struct AstExpression {
@@ -724,12 +743,14 @@ struct AstExpression {
         AstProcedure Procedure;
         AstCall Call;
         AstIndex Index;
+        AstSizeOf SizeOf;
     };
 };
 
 // Statement
 
 struct AstScope {
+    AstScope* Parent;
     AstStatement** Statements;
 };
 
@@ -803,11 +824,31 @@ typedef struct AstTypeArray {
 typedef enum AstTypeKind {
     AstTypeKind_None,
     AstTypeKind_Unknown,
+    AstTypeKind_Type,
+    AstTypeKind_Integer, // NOTE: This only comes from literals
+    AstTypeKind_Float, // NOTE: This only comes from literals
+    AstTypeKind_u8,
+    AstTypeKind_u16,
+    AstTypeKind_u32,
+    AstTypeKind_u64,
+    AstTypeKind_s8,
+    AstTypeKind_s16,
+    AstTypeKind_s32,
+    AstTypeKind_s64,
+    AstTypeKind_f32,
+    AstTypeKind_f64,
+    AstTypeKind_bool,
     AstTypeKind_Pointer,
     AstTypeKind_Procedure,
     AstTypeKind_Struct,
     AstTypeKind_Array,
 } AstTypeKind;
+
+typedef enum AstTypeCompletion {
+    AstTypeCompletion_Incomplete,
+    AstTypeCompletion_Completing,
+    AstTypeCompletion_Complete,
+} AstTypeCompletion;
 
 struct AstType {
     AstTypeKind Kind;
@@ -860,15 +901,15 @@ Token Parser_ExpectToken(Parser* parser, TokenKind kind) {
     return token;
 }
 
-AstExpression* Parser_ParseExpression(Parser* parser);
-AstExpression* Parser_ParsePrimaryExpression(Parser* parser);
-AstExpression* Parser_ParseBinaryExpression(Parser* parser, u64 presedence);
-AstType* Parser_ParseType(Parser* parser);
-AstStatement* Parser_ParseStatement(Parser* parser);
-AstScope* Parser_ParseScope(Parser* parser);
+AstExpression* Parser_ParseExpression(Parser* parser, AstScope* parentScope);
+AstExpression* Parser_ParsePrimaryExpression(Parser* parser, AstScope* parentScope);
+AstExpression* Parser_ParseBinaryExpression(Parser* parser, u64 presedence, AstScope* parentScope);
+AstType* Parser_ParseType(Parser* parser, AstScope* parentScope);
+AstStatement* Parser_ParseStatement(Parser* parser, AstScope* parentScope);
+AstScope* Parser_ParseScope(Parser* parser, AstScope* parentScope);
 
-AstExpression* Parser_ParseExpression(Parser* parser) {
-    return Parser_ParseBinaryExpression(parser, 0);
+AstExpression* Parser_ParseExpression(Parser* parser, AstScope* parentScope) {
+    return Parser_ParseBinaryExpression(parser, 0, parentScope);
 }
 
 u64 Parser_GetUnaryPresedence(Token token) {
@@ -908,7 +949,7 @@ u64 Parser_GetBinaryPresedence(Token token) {
     }
 }
 
-AstExpression* Parser_ParseProcedure(Parser* parser, AstProcedureArgument* firstArg) {
+AstExpression* Parser_ParseProcedure(Parser* parser, AstProcedureArgument* firstArg, AstScope* parentScope) {
     AstProcedureArgument* arguments = DynamicArrayCreate(AstProcedureArgument);
     if (firstArg) {
         DynamicArrayPush(arguments, *firstArg); // TODO: Memory leak
@@ -920,7 +961,7 @@ AstExpression* Parser_ParseProcedure(Parser* parser, AstProcedureArgument* first
         Token nameToken = Parser_ExpectToken(parser, TokenKind_Name);
 
         Parser_ExpectToken(parser, TokenKind_Colon);
-        AstType* type = Parser_ParseType(parser);
+        AstType* type = Parser_ParseType(parser, parentScope);
 
         DynamicArrayPush(arguments, ((AstProcedureArgument){
             .Name = nameToken,
@@ -933,12 +974,12 @@ AstExpression* Parser_ParseProcedure(Parser* parser, AstProcedureArgument* first
     AstType* returnType = NULL;
     if (parser->Current.Kind == TokenKind_RightArrow) {
         Parser_ExpectToken(parser, TokenKind_RightArrow);
-        returnType = Parser_ParseType(parser);
+        returnType = Parser_ParseType(parser, parentScope);
     }
 
-    AstScope* body = Parser_ParseScope(parser);
+    AstScope* body = Parser_ParseScope(parser, parentScope);
 
-    AstExpression* expression = malloc(sizeof(AstExpression));
+    AstExpression* expression = Allocate(sizeof(AstExpression));
     expression->Kind = AstExpressionKind_Procedure;
     expression->Procedure.Arguments = arguments;
     expression->Procedure.ReturnType = returnType;
@@ -947,12 +988,12 @@ AstExpression* Parser_ParseProcedure(Parser* parser, AstProcedureArgument* first
     return expression;
 }
 
-AstExpression* Parser_ParsePrimaryExpression(Parser* parser) {
+AstExpression* Parser_ParsePrimaryExpression(Parser* parser, AstScope* parentScope) {
     switch (parser->Current.Kind) {
         case TokenKind_Name: {
             Token nameToken = Parser_ExpectToken(parser, TokenKind_Name);
 
-            AstExpression* expression = malloc(sizeof(AstExpression));
+            AstExpression* expression = Allocate(sizeof(AstExpression));
             expression->Kind = AstExpressionKind_Name;
             expression->Name.Name = nameToken;
 
@@ -962,25 +1003,25 @@ AstExpression* Parser_ParsePrimaryExpression(Parser* parser) {
         case TokenKind_Keyword: {
             switch (Parser_ExpectToken(parser, TokenKind_Keyword).Keyword) {
                 case Keyword_True: {
-                    AstExpression* expression = malloc(sizeof(AstExpression));
+                    AstExpression* expression = Allocate(sizeof(AstExpression));
                     expression->Kind = AstExpressionKind_True;
                     return expression;
                 } break;
 
                 case Keyword_False: {
-                    AstExpression* expression = malloc(sizeof(AstExpression));
+                    AstExpression* expression = Allocate(sizeof(AstExpression));
                     expression->Kind = AstExpressionKind_False;
                     return expression;
                 } break;
 
                 case Keyword_Null: {
-                    AstExpression* expression = malloc(sizeof(AstExpression));
+                    AstExpression* expression = Allocate(sizeof(AstExpression));
                     expression->Kind = AstExpressionKind_Null;
                     return expression;
                 } break;
 
                 case Keyword_Struct: {
-                    AstScope* scope = Parser_ParseScope(parser); // TODO: Memory leak
+                    AstScope* scope = Parser_ParseScope(parser, parentScope); // TODO: Memory leak
 
                     AstDeclaration* declarations = DynamicArrayCreate(AstDeclaration);
                     for (u64 i = 0; i < DynamicArrayLength(scope->Statements); i++) {
@@ -991,10 +1032,21 @@ AstExpression* Parser_ParsePrimaryExpression(Parser* parser) {
                         DynamicArrayPush(declarations, scope->Statements[i]->Declaration);
                     }
 
-                    AstExpression* expression = malloc(sizeof(AstExpression));
+                    AstExpression* expression = Allocate(sizeof(AstExpression));
                     expression->Kind = AstExpressionKind_Struct;
                     expression->Struct.Declarations = declarations;
                     return expression;
+                } break;
+
+                case Keyword_SizeOf: {
+                    Parser_ExpectToken(parser, TokenKind_LParen);
+                    AstExpression* expression = Parser_ParseExpression(parser, parentScope);
+                    Parser_ExpectToken(parser, TokenKind_RParen);
+
+                    AstExpression* sizeOf = Allocate(sizeof(AstExpression));
+                    sizeOf->Kind = AstExpressionKind_Sizeof;
+                    sizeOf->SizeOf.Expression = expression;
+                    return sizeOf;
                 } break;
 
                 default: {
@@ -1008,7 +1060,7 @@ AstExpression* Parser_ParsePrimaryExpression(Parser* parser) {
         case TokenKind_String: {
             Token literalToken = Parser_NextToken(parser);
 
-            AstExpression* expression = malloc(sizeof(AstExpression));
+            AstExpression* expression = Allocate(sizeof(AstExpression));
             expression->Kind = AstExpressionKind_Literal;
             expression->Literal.Token = literalToken;
 
@@ -1019,10 +1071,10 @@ AstExpression* Parser_ParsePrimaryExpression(Parser* parser) {
             Parser_ExpectToken(parser, TokenKind_LParen);
 
             if (parser->Current.Kind == TokenKind_RParen) {
-                return Parser_ParseProcedure(parser, NULL);
+                return Parser_ParseProcedure(parser, NULL, parentScope);
             }
 
-            AstExpression* expression = Parser_ParseExpression(parser);
+            AstExpression* expression = Parser_ParseExpression(parser, parentScope);
 
             if (parser->Current.Kind == TokenKind_Colon) { // Procedure
                 if (expression->Kind != AstExpressionKind_Name) {
@@ -1031,12 +1083,12 @@ AstExpression* Parser_ParsePrimaryExpression(Parser* parser) {
                 }
 
                 Parser_ExpectToken(parser, TokenKind_Colon);
-                AstType* type = Parser_ParseType(parser);
+                AstType* type = Parser_ParseType(parser, parentScope);
 
                 return Parser_ParseProcedure(parser, &(AstProcedureArgument){
                     .Name = expression->Name.Name,
                     .Type = type,
-                });
+                }, parentScope);
             } else {
                 Parser_ExpectToken(parser, TokenKind_RParen);
                 return expression;
@@ -1053,19 +1105,19 @@ AstExpression* Parser_ParsePrimaryExpression(Parser* parser) {
     return NULL;
 }
 
-AstExpression* Parser_ParseBinaryExpression(Parser* parser, u64 presedence) {
+AstExpression* Parser_ParseBinaryExpression(Parser* parser, u64 presedence, AstScope* parentScope) {
     u64 unaryPresedence = Parser_GetUnaryPresedence(parser->Current);
     AstExpression* left;
     if (unaryPresedence != 0 && unaryPresedence > presedence) {
         Token operator = Parser_NextToken(parser);
-        AstExpression* operand = Parser_ParseBinaryExpression(parser, unaryPresedence);
+        AstExpression* operand = Parser_ParseBinaryExpression(parser, unaryPresedence, parentScope);
         
-        left = malloc(sizeof(AstExpression));
+        left = Allocate(sizeof(AstExpression));
         left->Kind = AstExpressionKind_Unary;
         left->Unary.Operator = operator;
         left->Unary.Operand = operand;
     } else {
-        left = Parser_ParsePrimaryExpression(parser);
+        left = Parser_ParsePrimaryExpression(parser, parentScope);
     }
 
     while (TRUE) {
@@ -1081,21 +1133,21 @@ AstExpression* Parser_ParseBinaryExpression(Parser* parser, u64 presedence) {
                     first = FALSE;
                 }
 
-                DynamicArrayPush(arguments, Parser_ParseExpression(parser));
+                DynamicArrayPush(arguments, Parser_ParseExpression(parser, parentScope));
             }
             Parser_ExpectToken(parser, TokenKind_RParen);
 
-            AstExpression* expression = malloc(sizeof(AstExpression));
+            AstExpression* expression = Allocate(sizeof(AstExpression));
             expression->Kind = AstExpressionKind_Call;
             expression->Call.Operand = left;
             expression->Call.Arguments = arguments;
             left = expression;
         } else if (parser->Current.Kind == TokenKind_LBracket) {
             Parser_ExpectToken(parser, TokenKind_LBracket);
-            AstExpression* index = Parser_ParseExpression(parser);
+            AstExpression* index = Parser_ParseExpression(parser, parentScope);
             Parser_ExpectToken(parser, TokenKind_RBracket);
 
-            AstExpression* expression = malloc(sizeof(AstExpression));
+            AstExpression* expression = Allocate(sizeof(AstExpression));
             expression->Kind = AstExpressionKind_Index;
             expression->Index.Operand = left;
             expression->Index.Index = index;
@@ -1113,7 +1165,7 @@ AstExpression* Parser_ParseBinaryExpression(Parser* parser, u64 presedence) {
             case TokenKind_Period: {
                 Token nameToken = Parser_ExpectToken(parser, TokenKind_Name);
 
-                AstExpression* newLeft = malloc(sizeof(AstExpression));
+                AstExpression* newLeft = Allocate(sizeof(AstExpression));
                 newLeft->Kind = AstExpressionKind_Field;
                 newLeft->Field.Expression = left;
                 newLeft->Field.Name = nameToken;
@@ -1122,9 +1174,9 @@ AstExpression* Parser_ParseBinaryExpression(Parser* parser, u64 presedence) {
             } break;
 
             default: {
-                AstExpression* right = Parser_ParseBinaryExpression(parser, binaryPresedence);
+                AstExpression* right = Parser_ParseBinaryExpression(parser, binaryPresedence, parentScope);
 
-                AstExpression* newLeft = malloc(sizeof(AstExpression));
+                AstExpression* newLeft = Allocate(sizeof(AstExpression));
                 newLeft->Kind = AstExpressionKind_Binary;
                 newLeft->Binary.Left = left;
                 newLeft->Binary.Operator = operator;
@@ -1138,11 +1190,11 @@ AstExpression* Parser_ParseBinaryExpression(Parser* parser, u64 presedence) {
     return left;
 }
 
-AstType* Parser_ParseType(Parser* parser) {
+AstType* Parser_ParseType(Parser* parser, AstScope* parentScope) {
     switch (parser->Current.Kind) {
         case TokenKind_Name: {
             Token nameToken = Parser_ExpectToken(parser, TokenKind_Name);
-            AstType* type = malloc(sizeof(AstType));
+            AstType* type = Allocate(sizeof(AstType));
             type->Kind = AstTypeKind_Unknown;
             type->Unknown.Name = nameToken;
             return type;
@@ -1150,15 +1202,15 @@ AstType* Parser_ParseType(Parser* parser) {
 
         case TokenKind_Caret: {
             Parser_ExpectToken(parser, TokenKind_Caret);
-            AstType* type = malloc(sizeof(AstType));
+            AstType* type = Allocate(sizeof(AstType));
             type->Kind = AstTypeKind_Pointer;
-            type->Pointer.PointerTo = Parser_ParseType(parser);
+            type->Pointer.PointerTo = Parser_ParseType(parser, parentScope);
             return type;
         } break;
 
         case TokenKind_LParen: {
             Parser_ExpectToken(parser, TokenKind_LParen);
-            AstType* type = Parser_ParseType(parser);
+            AstType* type = Parser_ParseType(parser, parentScope);
             Parser_ExpectToken(parser, TokenKind_RParen);
             return type;
         } break;
@@ -1170,12 +1222,12 @@ AstType* Parser_ParseType(Parser* parser) {
             if (parser->Current.Kind == TokenKind_PeriodPeriod) {
                 dynamic = TRUE;
             } else if (parser->Current.Kind != TokenKind_RBracket) {
-                count = Parser_ParseExpression(parser);
+                count = Parser_ParseExpression(parser, parentScope);
             }
             Parser_ExpectToken(parser, TokenKind_RBracket);
-            AstType* arrayOf = Parser_ParseType(parser);
+            AstType* arrayOf = Parser_ParseType(parser, parentScope);
             
-            AstType* type = malloc(sizeof(AstType));
+            AstType* type = Allocate(sizeof(AstType));
             type->Kind = AstTypeKind_Array;
             type->Array.Dynamic = dynamic;
             type->Array.Count = count;
@@ -1193,36 +1245,36 @@ AstType* Parser_ParseType(Parser* parser) {
     return NULL;
 }
 
-AstStatement* Parser_ParseStatement(Parser* parser) {
+AstStatement* Parser_ParseStatement(Parser* parser, AstScope* parentScope) {
     if (parser->Current.Kind == TokenKind_Semicolon) {
         Parser_ExpectToken(parser, TokenKind_Semicolon);
-        return Parser_ParseStatement(parser);
+        return Parser_ParseStatement(parser, parentScope);
     } else if (parser->Current.Kind == TokenKind_LBrace) {
-        AstStatement* statement = malloc(sizeof(AstStatement));
+        AstStatement* statement = Allocate(sizeof(AstStatement));
         statement->Kind = AstStatementKind_Scope;
-        statement->Scope = *Parser_ParseScope(parser); // TODO: Memory leak
+        statement->Scope = *Parser_ParseScope(parser, parentScope); // TODO: Memory leak
         return statement;
     } else if (parser->Current.Kind == TokenKind_Keyword) {
         switch (Parser_ExpectToken(parser, TokenKind_Keyword).Keyword) {
             case Keyword_Return: {
-                AstStatement* statement = malloc(sizeof(AstStatement));
+                AstStatement* statement = Allocate(sizeof(AstStatement));
                 statement->Kind = AstStatementKind_Return;
-                statement->Return.Expression = Parser_ParseExpression(parser);
+                statement->Return.Expression = Parser_ParseExpression(parser, parentScope);
                 Parser_ExpectToken(parser, TokenKind_Semicolon);
                 return statement;
             } break;
 
             case Keyword_If: {
-                AstExpression* condition = Parser_ParseExpression(parser);
-                AstStatement* then = Parser_ParseStatement(parser);
+                AstExpression* condition = Parser_ParseExpression(parser, parentScope);
+                AstStatement* then = Parser_ParseStatement(parser, parentScope);
 
                 AstStatement* else_ = NULL;
                 if (parser->Current.Kind == TokenKind_Keyword && parser->Current.Keyword == Keyword_Else) {
                     Parser_ExpectToken(parser, TokenKind_Keyword);
-                    else_ = Parser_ParseStatement(parser);
+                    else_ = Parser_ParseStatement(parser, parentScope);
                 }
 
-                AstStatement* statement = malloc(sizeof(AstStatement));
+                AstStatement* statement = Allocate(sizeof(AstStatement));
                 statement->Kind = AstStatementKind_If;
                 statement->If.Condition = condition;
                 statement->If.Then = then;
@@ -1236,7 +1288,7 @@ AstStatement* Parser_ParseStatement(Parser* parser) {
             } break;
         }
     } else {
-        AstExpression* expression = Parser_ParseExpression(parser);
+        AstExpression* expression = Parser_ParseExpression(parser, parentScope);
 
         if (parser->Current.Kind == TokenKind_Colon) {
             if (expression->Kind != AstExpressionKind_Name) {
@@ -1248,7 +1300,7 @@ AstStatement* Parser_ParseStatement(Parser* parser) {
 
             AstType* type = NULL;
             if (parser->Current.Kind != TokenKind_Equals && parser->Current.Kind != TokenKind_Colon) {
-                type = Parser_ParseType(parser);
+                type = Parser_ParseType(parser, parentScope);
             }
 
             b8 constant = FALSE;
@@ -1257,7 +1309,7 @@ AstStatement* Parser_ParseStatement(Parser* parser) {
                 if (Parser_NextToken(parser).Kind == TokenKind_Colon) {
                     constant = TRUE;
                 }
-                value = Parser_ParseExpression(parser);
+                value = Parser_ParseExpression(parser, parentScope);
             }
 
             if (!type && !value) {
@@ -1269,7 +1321,7 @@ AstStatement* Parser_ParseStatement(Parser* parser) {
                 Parser_ExpectToken(parser, TokenKind_Semicolon);
             }
 
-            AstStatement* declaration = malloc(sizeof(AstStatement));
+            AstStatement* declaration = Allocate(sizeof(AstStatement));
             declaration->Kind = AstStatementKind_Declaration;
             declaration->Declaration.Name = expression->Name.Name;
             declaration->Declaration.Type = type;
@@ -1278,10 +1330,10 @@ AstStatement* Parser_ParseStatement(Parser* parser) {
             return declaration;
         } else if (TokenIsAssignment(parser->Current)) {
             Token operator = Parser_NextToken(parser);
-            AstExpression* value = Parser_ParseExpression(parser);
+            AstExpression* value = Parser_ParseExpression(parser, parentScope);
             Parser_ExpectToken(parser, TokenKind_Semicolon);
 
-            AstStatement* assignment = malloc(sizeof(AstStatement));
+            AstStatement* assignment = Allocate(sizeof(AstStatement));
             assignment->Kind = AstStatementKind_Assignment;
             assignment->Assignment.Operand = expression;
             assignment->Assignment.Operator = operator;
@@ -1289,7 +1341,7 @@ AstStatement* Parser_ParseStatement(Parser* parser) {
             return assignment;
         } else {
             Parser_ExpectToken(parser, TokenKind_Semicolon);
-            AstStatement* statement = malloc(sizeof(AstStatement));
+            AstStatement* statement = Allocate(sizeof(AstStatement));
             statement->Kind = AstStatementKind_Expression;
             statement->Expression = *expression; // Memory leak
             return statement;
@@ -1300,17 +1352,19 @@ AstStatement* Parser_ParseStatement(Parser* parser) {
     return NULL;
 }
 
-AstScope* Parser_ParseScope(Parser* parser) {
+AstScope* Parser_ParseScope(Parser* parser, AstScope* parentScope) {
+    AstScope* scope = Allocate(sizeof(AstScope));
+    scope->Parent = parentScope;
+
     Parser_ExpectToken(parser, TokenKind_LBrace);
     AstStatement** statements = DynamicArrayCreate(AstStatement*);
 
     while (parser->Current.Kind != TokenKind_RBrace) {
-        DynamicArrayPush(statements, Parser_ParseStatement(parser));
+        DynamicArrayPush(statements, Parser_ParseStatement(parser, scope));
     }
 
     Parser_ExpectToken(parser, TokenKind_RBrace);
 
-    AstScope* scope = malloc(sizeof(AstScope));
     scope->Statements = statements;
 
     return scope;
@@ -1334,7 +1388,7 @@ int main(int argc, char** argv) {
     u64 length = ftell(file);
     fseek(file, 0, SEEK_SET);
 
-    char* source = malloc(length + 1);
+    char* source = Allocate(length + 1);
     fread(source, sizeof(char), length, file);
     source[length] = '\0';
 
@@ -1375,7 +1429,7 @@ int main(int argc, char** argv) {
 
     Parser parser;
     Parser_Init(&parser, path, source);
-    AstStatement* statement = Parser_ParseStatement(&parser);
+    AstStatement* statement = Parser_ParseStatement(&parser, NULL);
     Print_AstStatement(statement, 0);
 
     return 0;
@@ -1612,6 +1666,12 @@ void Print_AstExpression(AstExpression* expression, u64 indent) {
             printf("[");
             Print_AstExpression(expression->Index.Index, indent);
             printf("]");
+        } break;
+
+        case AstExpressionKind_Sizeof: {
+            printf("size_of(");
+            Print_AstExpression(expression->SizeOf.Expression, indent);
+            printf(")");
         } break;
 
         default: {
