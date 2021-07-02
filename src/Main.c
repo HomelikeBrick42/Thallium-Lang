@@ -137,6 +137,7 @@ typedef enum Keyword {
     Keyword_Else,
     Keyword_Struct,
     Keyword_SizeOf,
+    Keyword_Cast,
 
     Keyword_Count,
 } Keyword;
@@ -150,6 +151,7 @@ const char* KeywordNames[] = {
     [Keyword_Else] = "else",
     [Keyword_Struct] = "struct",
     [Keyword_SizeOf] = "size_of",
+    [Keyword_Cast] = "cast",
 };
 
 typedef struct Token {
@@ -647,6 +649,7 @@ typedef struct AstStruct AstStruct;
 typedef struct AstCall AstCall;
 typedef struct AstIndex AstIndex;
 typedef struct AstSizeOf AstSizeOf;
+typedef struct AstCast AstCast;
 
 typedef struct AstStatement AstStatement;
 typedef struct AstScope AstScope;
@@ -713,6 +716,11 @@ struct AstSizeOf {
     AstExpression* Expression;
 };
 
+struct AstCast {
+    AstType* Type;
+    AstExpression* Expression;
+};
+
 typedef enum AstExpressionKind {
     AstExpressionKind_None,
     AstExpressionKind_True,
@@ -728,6 +736,7 @@ typedef enum AstExpressionKind {
     AstExpressionKind_Call,
     AstExpressionKind_Index,
     AstExpressionKind_Sizeof,
+    AstExpressionKind_Cast,
 } AstExpressionKind;
 
 struct AstExpression {
@@ -744,6 +753,7 @@ struct AstExpression {
         AstCall Call;
         AstIndex Index;
         AstSizeOf SizeOf;
+        AstCast Cast;
     };
 };
 
@@ -824,20 +834,11 @@ typedef struct AstTypeArray {
 typedef enum AstTypeKind {
     AstTypeKind_None,
     AstTypeKind_Unknown,
+    AstTypeKind_Void,
     AstTypeKind_Type,
-    AstTypeKind_Integer, // NOTE: This only comes from literals
-    AstTypeKind_Float, // NOTE: This only comes from literals
-    AstTypeKind_u8,
-    AstTypeKind_u16,
-    AstTypeKind_u32,
-    AstTypeKind_u64,
-    AstTypeKind_s8,
-    AstTypeKind_s16,
-    AstTypeKind_s32,
-    AstTypeKind_s64,
-    AstTypeKind_f32,
-    AstTypeKind_f64,
-    AstTypeKind_bool,
+    AstTypeKind_Integer,
+    AstTypeKind_Float,
+    AstTypeKind_Bool,
     AstTypeKind_Pointer,
     AstTypeKind_Procedure,
     AstTypeKind_Struct,
@@ -852,6 +853,8 @@ typedef enum AstTypeCompletion {
 
 struct AstType {
     AstTypeKind Kind;
+    AstTypeCompletion Completion;
+    u64 Size;
 
     union {
         AstTypeUnknown Unknown;
@@ -859,6 +862,7 @@ struct AstType {
         AstTypeProcedure Procedure;
         AstStruct Struct;
         AstTypeArray Array;
+        b8 Signed;
     };
 };
 
@@ -1047,6 +1051,19 @@ AstExpression* Parser_ParsePrimaryExpression(Parser* parser, AstScope* parentSco
                     sizeOf->Kind = AstExpressionKind_Sizeof;
                     sizeOf->SizeOf.Expression = expression;
                     return sizeOf;
+                } break;
+
+                case Keyword_Cast: {
+                    Parser_ExpectToken(parser, TokenKind_LParen);
+                    AstType* type = Parser_ParseType(parser, parentScope);
+                    Parser_ExpectToken(parser, TokenKind_RParen);
+                    AstExpression* expression = Parser_ParsePrimaryExpression(parser, parentScope);
+
+                    AstExpression* result = Allocate(sizeof(AstExpression));
+                    result->Kind = AstExpressionKind_Cast;
+                    result->Cast.Type = type;
+                    result->Cast.Expression = expression;
+                    return result;
                 } break;
 
                 default: {
@@ -1471,6 +1488,11 @@ void Print_AstType(AstType* type, u64 indent) {
 
 void Print_AstStatement(AstStatement* statement, u64 indent) {
     switch (statement->Kind) {
+        case AstStatementKind_Expression: {
+            Print_AstExpression(&statement->Expression, indent);
+            printf(";\n");
+        } break;
+
         case AstStatementKind_Declaration: {
             Print_Indent(indent);
             printf("%s", statement->Declaration.Name.Name);
@@ -1671,6 +1693,14 @@ void Print_AstExpression(AstExpression* expression, u64 indent) {
         case AstExpressionKind_Sizeof: {
             printf("size_of(");
             Print_AstExpression(expression->SizeOf.Expression, indent);
+            printf(")");
+        } break;
+
+        case AstExpressionKind_Cast: {
+            printf("(cast(");
+            Print_AstType(expression->Cast.Type, indent);
+            printf(") ");
+            Print_AstExpression(expression->Cast.Expression, indent);
             printf(")");
         } break;
 
