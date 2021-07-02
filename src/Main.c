@@ -741,6 +741,9 @@ typedef enum AstExpressionKind {
 
 struct AstExpression {
     AstExpressionKind Kind;
+    AstType* Type;
+    b8 IsLValue;
+    b8 Constant;
 
     union {
         AstLiteral Literal;
@@ -838,6 +841,7 @@ typedef enum AstTypeKind {
     AstTypeKind_Type,
     AstTypeKind_Integer,
     AstTypeKind_Float,
+    AstTypeKind_String,
     AstTypeKind_Bool,
     AstTypeKind_Pointer,
     AstTypeKind_Procedure,
@@ -1105,7 +1109,7 @@ AstExpression* Parser_ParsePrimaryExpression(Parser* parser, AstScope* parentSco
                 return Parser_ParseProcedure(parser, &(AstProcedureArgument){
                     .Name = expression->Name.Name,
                     .Type = type,
-                }, parentScope);
+                }, parentScope); // TODO: Pass global scope here
             } else {
                 Parser_ExpectToken(parser, TokenKind_RParen);
                 return expression;
@@ -1385,6 +1389,97 @@ AstScope* Parser_ParseScope(Parser* parser, AstScope* parentScope) {
     scope->Statements = statements;
 
     return scope;
+}
+
+AstStatement* FindDeclaration(const char* name, AstScope* scope, AstScope** scopeFoundIn) {
+    if (!scope) {
+        if (scopeFoundIn) {
+            *scopeFoundIn = NULL;
+        }
+        return NULL;
+    }
+
+    for (u64 i = 0; i < DynamicArrayLength(scope->Statements); i++) {
+        if (scope->Statements[i]->Kind == AstStatementKind_Declaration &&
+            strcmp(scope->Statements[i]->Declaration.Name.Name, name) == 0) {
+            if (scopeFoundIn) {
+                *scopeFoundIn = scope;
+            }
+            return scope->Statements[i];
+        }
+    }
+
+    if (scope->Parent) {
+        return FindDeclaration(name, scope->Parent, scopeFoundIn);
+    }
+
+    if (scopeFoundIn) {
+        *scopeFoundIn = NULL;
+    }
+    return NULL;
+}
+
+void Complete_Statement(AstStatement* statement, AstScope* parentScope) {
+}
+
+void Complete_Expression(AstExpression* expression, AstScope* parentScope) {
+    if (!expression->Type) {
+        expression->Type = Allocate(sizeof(AstType));
+    } else if (expression->Type->Completion == AstTypeCompletion_Complete) {
+        return;
+    } else if (expression->Type->Completion == AstTypeCompletion_Completing) {
+        Error("Cyclic dependency detected!");
+        return;
+    }
+
+    expression->Type->Completion = AstTypeCompletion_Completing;
+
+    switch (expression->Kind) {
+        case AstExpressionKind_Literal: {
+            expression->Constant = TRUE;
+            switch (expression->Literal.Token.Kind) {
+                case TokenKind_Integer: {
+                    expression->Type->Kind = AstTypeKind_Integer;
+                    expression->Type->Size = 0;
+                } break;
+
+                case TokenKind_Float: {
+                    expression->Type->Kind = AstTypeKind_Float;
+                    expression->Type->Size = 0;
+                } break;
+
+                case TokenKind_String: {
+                    expression->Type->Kind = AstTypeKind_String;
+                    expression->Type->Size = sizeof(u8*) + sizeof(u64); // TODO:
+                } break;
+
+                default: {
+                    ASSERT(FALSE);
+                } break;
+            }
+        } break;
+
+        case AstExpressionKind_Name: {
+            AstScope* foundScope = NULL;
+            AstStatement* statement = FindDeclaration(expression->Name.Name.Name, parentScope, &foundScope);
+            if (!statement) {
+                expression->Type->Completion = AstTypeCompletion_Incomplete;
+                Error("Unable to find '%s'", expression->Name.Name.Name);
+                return;
+            }
+            Complete_Statement(statement, foundScope);
+
+            AstType* type = Allocate(sizeof(AstType));
+            memcpy(type, statement->Declaration.Type, sizeof(AstType));
+            expression->Type = type;
+        } break;
+
+        default: {
+            ASSERT(FALSE);
+        } break;
+    }
+
+    expression->Type->Completion = AstTypeCompletion_Complete;
 }
 
 void Print_AstType(AstType* type, u64 indent);
